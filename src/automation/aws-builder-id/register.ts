@@ -425,35 +425,28 @@ export async function handleCookiePopup(page: Page, ctx: PageAutomationContext):
   if (ctx.cookiePopupHandled) return;
   
   try {
-    // AWS uses multiple cookie consent variants — try all known selectors
-    const cookieSelectors = [
-      'button[data-id="awsccc-cb-btn-accept"]',
-      '#awsccc-cb-btn-accept',
-      'button.awsccc-cs-btn-content-accept',
-    ];
-
-    for (const sel of cookieSelectors) {
-      const isVisible = await page.evaluate((s) => {
-        const btn = document.querySelector(s) as HTMLElement | null;
-        if (!btn) return false;
-        const style = window.getComputedStyle(btn);
-        return style.display !== 'none' && style.visibility !== 'hidden' && btn.offsetParent !== null;
-      }, sel);
-      
-      if (isVisible) {
-        await page.click(sel);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        ctx.cookiePopupHandled = true;
-        return;
-      }
-    }
-
-    // Fallback: find any "Accept" button inside a cookie banner container
+    // Single IPC round-trip: check all cookie selectors and click if found
     const dismissed = await page.evaluate(() => {
+      const selectors = [
+        'button[data-id="awsccc-cb-btn-accept"]',
+        '#awsccc-cb-btn-accept',
+        'button.awsccc-cs-btn-content-accept',
+      ];
+
+      for (const sel of selectors) {
+        const btn = document.querySelector(sel) as HTMLElement | null;
+        if (!btn) continue;
+        const style = window.getComputedStyle(btn);
+        if (style.display !== 'none' && style.visibility !== 'hidden' && btn.offsetParent !== null) {
+          (btn as HTMLButtonElement).click();
+          return true;
+        }
+      }
+
+      // Fallback: find any "Accept" button inside a cookie banner container
       const containers = Array.from(document.querySelectorAll('#cookie-banner, #awsccc-cb-content, .awsccc-cs-container, [id*="awsccc"], [class*="awsccc"]'));
       for (const container of containers) {
-        const buttons = Array.from(container.querySelectorAll('button'));
-        for (const btn of buttons) {
+        for (const btn of Array.from(container.querySelectorAll('button'))) {
           const text = btn.textContent?.trim().toLowerCase() || '';
           if (text === 'accept' || text.includes('accept')) {
             btn.click();
@@ -465,7 +458,7 @@ export async function handleCookiePopup(page: Page, ctx: PageAutomationContext):
     });
 
     if (dismissed) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 100 : 500));
       ctx.cookiePopupHandled = true;
     }
   } catch {
