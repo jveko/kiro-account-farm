@@ -3,6 +3,7 @@
  * Manages parallel AWS Builder ID registrations with one worker per base email
  */
 
+import { join } from "path";
 import { logGlobal, logSession } from "../../utils/logger";
 import { checkHealth, closeAllBrowsers, deleteAllBrowserProfiles, getOrCreateBrowserProfile, resetBrowserProfile } from "../../services/browser";
 import { closeAllLocalBrowsers, resetInstanceCount } from "../../services/browser-local";
@@ -228,7 +229,7 @@ export async function batchRegister(config: BatchRegistrationConfig): Promise<Ba
 
   // Generate output file path upfront for cleanup
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
-  const outputFile = `output/kiro-accounts-${timestamp}.json`;
+  const outputFile = join("output", `kiro-accounts-${timestamp}.json`);
 
   // Register cleanup handlers for crashes/interrupts
   const cleanup = async (reason: string) => {

@@ -5,6 +5,7 @@
  * Creates multiple AWS Builder ID accounts for Kiro IDE
  */
 
+import { join } from "path";
 import { batchRegister, exportResults } from "../src/automation/aws-builder-id/orchestrator";
 import { isValidEmail } from "../src/utils/email-provider";
 import { MailtmClient } from "../src/api/mailtm";
@@ -192,7 +193,7 @@ async function main() {
 
     // Export results to output directory
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
-    const outputFile = `output/kiro-accounts-${timestamp}.json`;
+    const outputFile = join("output", `kiro-accounts-${timestamp}.json`);
     exportResults(progress, outputFile);
 
     console.log(`\n✅ Completed in ${duration}s`);

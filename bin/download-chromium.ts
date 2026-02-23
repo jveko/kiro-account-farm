@@ -5,7 +5,7 @@
  * Usage: bun bin/download-chromium.ts [version]
  */
 
-import { existsSync, mkdirSync, chmodSync } from "fs";
+import { existsSync, mkdirSync, chmodSync, rmSync, cpSync } from "fs";
 import { join } from "path";
 
 const DEFAULT_VERSION = "142.0.7444.175";
@@ -105,16 +105,13 @@ async function extractArchive(archivePath: string, platform: Platform): Promise<
 
       // Remove existing app if present
       if (existsSync(destApp)) {
-        Bun.spawnSync(["rm", "-rf", destApp]);
+        rmSync(destApp, { recursive: true, force: true });
       }
 
-      const cp = Bun.spawnSync(["cp", "-R", srcApp, destApp]);
-      if (cp.exitCode !== 0) {
-        throw new Error(`Failed to copy app: ${cp.stderr.toString()}`);
-      }
+      cpSync(srcApp, destApp, { recursive: true });
     } finally {
       Bun.spawnSync(["hdiutil", "detach", mountPoint, "-quiet"]);
-      Bun.spawnSync(["rm", "-rf", mountPoint]);
+      rmSync(mountPoint, { recursive: true, force: true });
     }
   } else if (platform === "linux") {
     const tar = Bun.spawnSync(["tar", "-xJf", archivePath, "-C", INSTALL_DIR, "--strip-components=1"]);
@@ -122,7 +119,7 @@ async function extractArchive(archivePath: string, platform: Platform): Promise<
       throw new Error(`Failed to extract tar.xz: ${tar.stderr.toString()}`);
     }
   } else if (platform === "win32") {
-    const unzip = Bun.spawnSync(["unzip", "-o", archivePath, "-d", INSTALL_DIR]);
+    const unzip = Bun.spawnSync(["powershell", "-Command", `Expand-Archive -Path '${archivePath}' -DestinationPath '${INSTALL_DIR}' -Force`]);
     if (unzip.exitCode !== 0) {
       throw new Error(`Failed to extract zip: ${unzip.stderr.toString()}`);
     }
@@ -157,7 +154,7 @@ async function main() {
     await extractArchive(archivePath, platform);
 
     // Cleanup archive
-    Bun.spawnSync(["rm", "-f", archivePath]);
+    rmSync(archivePath, { force: true });
 
     // Make executable on unix
     if (platform !== "win32" && existsSync(execPath)) {
@@ -181,7 +178,7 @@ async function main() {
   } catch (error) {
     console.error(`\n❌ Failed: ${error}`);
     // Cleanup on failure
-    Bun.spawnSync(["rm", "-rf", INSTALL_DIR]);
+    rmSync(INSTALL_DIR, { recursive: true, force: true });
     process.exit(1);
   }
 }

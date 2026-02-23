@@ -32,7 +32,7 @@ export interface RequestLogger {
   clear: () => void;
 }
 
-const LOG_DIR = "output/logs";
+const LOG_DIR = join("output", "logs");
 
 const SKIP_RESOURCE_TYPES = new Set([
   "stylesheet",
