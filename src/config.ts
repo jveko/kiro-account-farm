@@ -36,14 +36,31 @@ export const CHROME_VERSION = "143";
 export const DEFAULT_BROWSER_PROFILE =
   Bun.env.DEFAULT_BROWSER_PROFILE || "google-automation";
 
-// Timeouts (in milliseconds)
-export const TIMEOUTS = {
+// Browser mode: "roxy" (Roxy Browser API) or "local" (fingerprint-chromium)
+export const BROWSER_MODE: "roxy" | "local" =
+  (Bun.env.BROWSER_MODE as "roxy" | "local") || "roxy";
+
+// fingerprint-chromium executable path (for BROWSER_MODE=local)
+export const CHROME_EXECUTABLE_PATH = Bun.env.CHROME_EXECUTABLE_PATH || "";
+
+// Timeouts (in milliseconds) — doubled in low bandwidth mode
+const _TIMEOUTS = {
   DEFAULT: 30000,
   SHORT: 5000,
   MEDIUM: 15000,
   LONG: 60000,
   CAPTCHA: 120000,
 } as const;
+
+const _TIMEOUTS_LOW_BW = {
+  DEFAULT: 60000,
+  SHORT: 15000,
+  MEDIUM: 30000,
+  LONG: 120000,
+  CAPTCHA: 180000,
+} as const;
+
+export const TIMEOUTS = (Bun.env.LOW_BANDWIDTH === "true" || Bun.env.LOW_BANDWIDTH === "1") ? _TIMEOUTS_LOW_BW : _TIMEOUTS;
 
 // Wait durations for animations and transitions (in milliseconds)
 export const WAIT = {
@@ -76,6 +93,9 @@ export const URLS = {
 // Logging
 export const LOG_LEVEL = Bun.env.LOG_LEVEL || "info";
 export const VERBOSE = LOG_LEVEL === "debug";
+
+// Low bandwidth mode — reduces resource usage and extends timeouts for slow connections
+export const LOW_BANDWIDTH = Bun.env.LOW_BANDWIDTH === "true" || Bun.env.LOW_BANDWIDTH === "1";
 
 // AWS Builder ID settings
 export const AWS_BUILDER_ID = {
@@ -135,7 +155,9 @@ export const CONFIG = {
     maxRetries: MAX_PROXY_RETRIES,
   },
   browser: {
+    mode: BROWSER_MODE,
     defaultProfile: DEFAULT_BROWSER_PROFILE,
+    chromeExecutablePath: CHROME_EXECUTABLE_PATH,
   },
   timeouts: TIMEOUTS,
   wait: WAIT,
@@ -144,6 +166,7 @@ export const CONFIG = {
     level: LOG_LEVEL,
     verbose: VERBOSE,
   },
+  lowBandwidth: LOW_BANDWIDTH,
   awsBuilderID: AWS_BUILDER_ID,
   batchRegistration: BATCH_REGISTRATION,
 } as const;
