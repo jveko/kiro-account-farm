@@ -5,8 +5,8 @@
  * Usage: bun bin/download-chromium.ts [version]
  */
 
-import { existsSync, mkdirSync, chmodSync, rmSync, cpSync } from "fs";
-import { join } from "path";
+import { existsSync, mkdirSync, chmodSync, rmSync, cpSync, readdirSync } from "fs";
+import { join, basename } from "path";
 
 const DEFAULT_VERSION = "142.0.7444.175";
 const BASE_URL = "https://github.com/adryfish/fingerprint-chromium/releases/download";
@@ -122,6 +122,21 @@ async function extractArchive(archivePath: string, platform: Platform): Promise<
     const unzip = Bun.spawnSync(["powershell", "-Command", `Expand-Archive -Path '${archivePath}' -DestinationPath '${INSTALL_DIR}' -Force`]);
     if (unzip.exitCode !== 0) {
       throw new Error(`Failed to extract zip: ${unzip.stderr.toString()}`);
+    }
+
+    // Flatten nested subdirectory (zip contains a single top-level folder)
+    const archiveName = basename(archivePath);
+    const entries = readdirSync(INSTALL_DIR).filter(e => e !== archiveName);
+    if (entries.length === 1) {
+      const nested = join(INSTALL_DIR, entries[0]!);
+      if (existsSync(join(nested, "chrome.exe"))) {
+        for (const item of readdirSync(nested)) {
+          const src = join(nested, item);
+          const dest = join(INSTALL_DIR, item);
+          cpSync(src, dest, { recursive: true });
+        }
+        rmSync(nested, { recursive: true, force: true });
+      }
     }
   }
 }
