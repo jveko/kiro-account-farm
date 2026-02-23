@@ -199,7 +199,7 @@ export async function registrationWorker(
           lastPageType = result.pageType;
         }
 
-        // Check for fatal page errors in one round-trip
+        // Check for fatal page errors in one round-trip, retry up to 3 times
         const pageErrors = await page.evaluate(() => {
           const text = document.body?.innerText || "";
           return {
@@ -208,11 +208,37 @@ export async function registrationWorker(
               text.includes("couldn't verify your sign up session"),
           };
         });
-        if (pageErrors.sessionExpired) {
-          throw new IPBlockedError("AWS error: signup session expired");
-        }
-        if (result.pageType !== "verify" && pageErrors.awsError) {
-          throw new IPBlockedError("AWS error: likely IP blocked");
+        if (pageErrors.sessionExpired || (result.pageType !== "verify" && pageErrors.awsError)) {
+          const maxPageErrorRetries = 3;
+          let pageErrorResolved = false;
+          for (let per = 1; per <= maxPageErrorRetries; per++) {
+            logSession(account.email, `⚠ AWS error detected, reloading page... (${per}/${maxPageErrorRetries})`, "warn");
+            await page.reload({
+              waitUntil: (LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local") ? "domcontentloaded" : "networkidle2",
+              timeout: TIMEOUTS.LONG,
+            }).catch(() => {});
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+            ctx.processedPages.clear();
+            const retryErrors = await page.evaluate(() => {
+              const text = document.body?.innerText || "";
+              return {
+                awsError: text.includes("there was an error processing your request"),
+                sessionExpired: text.includes("Something doesn't compute") ||
+                  text.includes("couldn't verify your sign up session"),
+              };
+            });
+            if (!retryErrors.sessionExpired && !retryErrors.awsError) {
+              logSession(account.email, `✓ AWS error resolved after reload`);
+              pageErrorResolved = true;
+              break;
+            }
+          }
+          if (!pageErrorResolved) {
+            if (pageErrors.sessionExpired) {
+              throw new IPBlockedError("AWS error: signup session expired");
+            }
+            throw new IPBlockedError("AWS error: likely IP blocked");
+          }
         }
 
         // Handle verify page — check on every iteration to catch OTP errors

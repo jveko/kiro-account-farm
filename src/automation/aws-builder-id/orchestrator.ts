@@ -198,10 +198,9 @@ async function processEmailWorker(
         results.push(session);
         success = true;
       } catch (error) {
-        if (error instanceof IPBlockedError && retryCount < maxRetries) {
-          logSession(account.email, `⚠ IP blocked, will retry with new proxy...`, "warn");
-          retryCount++;
-          continue;
+        if (error instanceof IPBlockedError) {
+          logSession(account.email, `⚠ IP blocked, skipping account`, "warn");
+          break;
         }
         logSession(account.email, `Worker failed: ${error}`, "error");
         break;
