@@ -110,17 +110,6 @@ async function fastFill(page: Page, selector: string, text: string, maxRetries =
     try {
       await page.waitForSelector(selector, { timeout: TIMEOUTS.SHORT });
 
-      // Dismiss any cookie banner before typing (can appear mid-page-load and steal focus)
-      await page.evaluate(() => {
-        const banner = document.querySelector('#awsccc-cb-content, #cookie-banner, [id*="awsccc"]') as HTMLElement | null;
-        if (banner && banner.offsetParent !== null) {
-          const acceptBtn = banner.querySelector('#awsccc-cb-btn-accept, button') as HTMLElement | null;
-          if (acceptBtn) acceptBtn.click();
-          banner.style.display = 'none';
-        }
-      });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
       // Random mouse movement before filling (human-like behavior)
       if (!FAST_MODE) {
         await randomMouseMovement(page);
@@ -135,12 +124,12 @@ async function fastFill(page: Page, selector: string, text: string, maxRetries =
           input.click();
         }
       }, selector);
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 50 : 200));
 
       // Select all existing text, then clear
       await page.click(selector, { clickCount: 3 });
       await page.keyboard.press('Backspace');
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 30 : 100));
 
       // Ensure field is fully cleared via evaluate
       await page.evaluate((sel) => {
@@ -150,7 +139,7 @@ async function fastFill(page: Page, selector: string, text: string, maxRetries =
           input.dispatchEvent(new Event('input', { bubbles: true }));
         }
       }, selector);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 30 : 100));
       
       // Set value via JS in one atomic operation (immune to focus-stealing overlays)
       await page.evaluate((sel, val) => {
@@ -190,7 +179,7 @@ async function fastFill(page: Page, selector: string, text: string, maxRetries =
           input.dispatchEvent(new Event('input', { bubbles: true }));
         }
       }, selector);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 50 : 300));
     } catch (error) {
       console.log(`[Fill] Error (attempt ${attempt}/${maxRetries}): ${error instanceof Error ? error.message : String(error)}`);
       if (attempt === maxRetries) return false;
@@ -333,29 +322,11 @@ export async function handleVerifyPage(page: Page, verificationCode?: string): P
   }
 
   try {
-    // Input is nested inside the wrapper div
     const codeInputSelector = '[data-testid="email-verification-form-code-input"] input';
     await page.waitForSelector(codeInputSelector, { timeout: 5000 });
     
-    // Clear any existing value (prevents stale text from previous page transitions)
-    await page.click(codeInputSelector, { clickCount: 3 });
-    await page.keyboard.press('Backspace');
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // Force-clear via DOM to ensure no leftover text (e.g. name from previous step)
-    await page.evaluate((sel) => {
-      const input = document.querySelector(sel) as HTMLInputElement | null;
-      if (input) {
-        input.value = '';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-    }, codeInputSelector);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    
-    // Type with delay to simulate real user (helps with validation)
-    await page.type(codeInputSelector, verificationCode, { delay: AUTOMATION_DELAYS.TYPING_DELAY });
-    
-    await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.AFTER_FILL));
+    const filled = await fastFill(page, codeInputSelector, verificationCode);
+    if (!filled) return false;
 
     // Click Continue button
     const continueBtn = 'button[data-testid="email-verification-verify-button"]';
@@ -389,19 +360,11 @@ export async function handlePasswordPage(page: Page, account: AWSBuilderIDAccoun
   const confirmSelector = 'input[data-testid="test-retype-input"], input[placeholder="Re-enter password"]';
 
   try {
-    await page.waitForSelector(pwdSelector, { timeout: 5000 });
-    await page.click(pwdSelector, { clickCount: 3 });
-    await page.keyboard.press('Backspace');
-    await page.type(pwdSelector, account.password, { delay: AUTOMATION_DELAYS.TYPING_DELAY });
+    const filled1 = await fastFill(page, pwdSelector, account.password);
+    if (!filled1) return false;
     
-    await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.AFTER_FILL));
-    
-    await page.waitForSelector(confirmSelector, { timeout: 5000 });
-    await page.click(confirmSelector, { clickCount: 3 });
-    await page.keyboard.press('Backspace');
-    await page.type(confirmSelector, account.password, { delay: AUTOMATION_DELAYS.TYPING_DELAY });
-    
-    await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.AFTER_FILL));
+    const filled2 = await fastFill(page, confirmSelector, account.password);
+    if (!filled2) return false;
   } catch {
     return false;
   }

@@ -129,7 +129,7 @@ export async function registrationWorker(
 
     // Navigate to verification URL
     await page.goto(auth.verificationUriComplete, {
-      waitUntil: (LOW_BANDWIDTH || FAST_MODE) ? "domcontentloaded" : "networkidle2",
+      waitUntil: (LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local") ? "domcontentloaded" : "networkidle2",
       timeout: TIMEOUTS.LONG,
     });
 
@@ -151,7 +151,7 @@ export async function registrationWorker(
 
       logSession(account.email, `Page appears stuck, reloading... (${reload + 1}/${maxReloads})`);
       await page.reload({
-        waitUntil: LOW_BANDWIDTH ? "domcontentloaded" : "networkidle2",
+        waitUntil: (LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local") ? "domcontentloaded" : "networkidle2",
         timeout: TIMEOUTS.LONG,
       }).catch(() => {});
     }
@@ -184,7 +184,7 @@ export async function registrationWorker(
         if (stuckPageCount > 0 && stuckPageCount % 20 === 0) {
           logSession(account.email, `Page stuck on "${result.pageType}" for ${stuckPageCount} iterations, reloading...`);
           await page.reload({
-            waitUntil: LOW_BANDWIDTH ? "domcontentloaded" : "networkidle2",
+            waitUntil: (LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local") ? "domcontentloaded" : "networkidle2",
             timeout: TIMEOUTS.LONG,
           }).catch(() => {});
           await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -199,26 +199,20 @@ export async function registrationWorker(
           lastPageType = result.pageType;
         }
 
-        // Check for AWS generic error alert (likely IP blocked) — but not on verify page
-        // On verify page, this error means OTP submission failed, not IP blocked
-        if (result.pageType !== "verify") {
-          const hasAwsError = await page.evaluate(() => {
-            const text = document.body?.innerText || "";
-            return text.includes("there was an error processing your request");
-          });
-          if (hasAwsError) {
-            throw new IPBlockedError("AWS error: likely IP blocked");
-          }
-        }
-
-        // Check for expired signup session ("Something doesn't compute")
-        const hasSessionExpired = await page.evaluate(() => {
+        // Check for fatal page errors in one round-trip
+        const pageErrors = await page.evaluate(() => {
           const text = document.body?.innerText || "";
-          return text.includes("Something doesn't compute") ||
-            text.includes("couldn't verify your sign up session");
+          return {
+            awsError: text.includes("there was an error processing your request"),
+            sessionExpired: text.includes("Something doesn't compute") ||
+              text.includes("couldn't verify your sign up session"),
+          };
         });
-        if (hasSessionExpired) {
+        if (pageErrors.sessionExpired) {
           throw new IPBlockedError("AWS error: signup session expired");
+        }
+        if (result.pageType !== "verify" && pageErrors.awsError) {
+          throw new IPBlockedError("AWS error: likely IP blocked");
         }
 
         // Handle verify page — check on every iteration to catch OTP errors

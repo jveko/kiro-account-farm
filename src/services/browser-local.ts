@@ -225,9 +225,7 @@ export async function closeLocalBrowser(
 export async function closeAllLocalBrowsers(): Promise<number> {
   const count = activeSessions.size;
   const sessions = Array.from(activeSessions.keys());
-  for (const session of sessions) {
-    await closeLocalBrowser(session);
-  }
+  await Promise.allSettled(sessions.map((session) => closeLocalBrowser(session)));
   usedSlots.clear();
   return count;
 }
