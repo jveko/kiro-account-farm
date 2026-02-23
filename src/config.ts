@@ -71,8 +71,28 @@ export const WAIT = {
   NAVIGATION: 5000,
 } as const;
 
+// Fast mode — reduces automation delays and skips human-like mouse movements for speed
+export let FAST_MODE = Bun.env.FAST_MODE === "true" || Bun.env.FAST_MODE === "1";
+
+// Skip proxy validation — just rotate ports without fraud/residential/duplicate checks
+export let SKIP_PROXY_CHECK = Bun.env.SKIP_PROXY_CHECK === "true" || Bun.env.SKIP_PROXY_CHECK === "1";
+
+/**
+ * Enable fast mode at runtime (called by CLI --fast flag)
+ */
+export function enableFastMode(): void {
+  FAST_MODE = true;
+}
+
+/**
+ * Enable skip proxy check at runtime (called by CLI --skip-proxy-check flag)
+ */
+export function enableSkipProxyCheck(): void {
+  SKIP_PROXY_CHECK = true;
+}
+
 // Human-like automation delays (in milliseconds)
-export const AUTOMATION_DELAYS = {
+const _AUTOMATION_DELAYS = {
   TYPING_DELAY: 80, // delay between keystrokes
   AFTER_FILL: 800, // wait after filling an input
   BEFORE_CLICK: 500, // wait before clicking a button
@@ -80,6 +100,22 @@ export const AUTOMATION_DELAYS = {
   AFTER_NAVIGATION: 2000, // wait after page navigation
   BETWEEN_STEPS: 1500, // wait between major steps
 } as const;
+
+const _AUTOMATION_DELAYS_FAST = {
+  TYPING_DELAY: 0, // skip typing delay, use JS value set
+  AFTER_FILL: 200, // minimal wait for React state update
+  BEFORE_CLICK: 100, // minimal wait before click
+  AFTER_CLICK: 300, // minimal wait after click
+  AFTER_NAVIGATION: 500, // minimal navigation wait
+  BETWEEN_STEPS: 300, // minimal step gap
+} as const;
+
+export const AUTOMATION_DELAYS = new Proxy(_AUTOMATION_DELAYS, {
+  get(_target, prop) {
+    const target = FAST_MODE ? _AUTOMATION_DELAYS_FAST : _AUTOMATION_DELAYS;
+    return target[prop as keyof typeof _AUTOMATION_DELAYS];
+  },
+}) as typeof _AUTOMATION_DELAYS;
 
 // URLs
 export const URLS = {
@@ -167,6 +203,7 @@ export const CONFIG = {
     verbose: VERBOSE,
   },
   lowBandwidth: LOW_BANDWIDTH,
+  get fastMode() { return FAST_MODE; },
   awsBuilderID: AWS_BUILDER_ID,
   batchRegistration: BATCH_REGISTRATION,
 } as const;

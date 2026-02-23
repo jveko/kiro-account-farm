@@ -6,7 +6,7 @@
 import { logGlobal, logSession } from "../../utils/logger";
 import { checkHealth, closeAllBrowsers, deleteAllBrowserProfiles, getOrCreateBrowserProfile, resetBrowserProfile } from "../../services/browser";
 import { closeAllLocalBrowsers, resetInstanceCount } from "../../services/browser-local";
-import { getNextValidProxy, isProxyConfigured, getCurrentPort } from "../../services/proxy";
+import { getNextValidProxy, getNextProxy, isProxyConfigured, getCurrentPort } from "../../services/proxy";
 import { generateEmailAlias } from "../../utils/email-provider";
 import { generatePassword, generateName } from "../../utils/generators";
 import type { EmailProvider } from "../../types/provider";
@@ -14,7 +14,7 @@ import { MailtmClient } from "../../api/mailtm";
 import { FreemailClient } from "../../api/freemail";
 import { SessionManager } from "./session";
 import { registrationWorker, IPBlockedError, type WorkerProxy } from "./worker";
-import { BATCH_REGISTRATION, CREDENTIAL_API, DEFAULT_BROWSER_PROFILE, BROWSER_MODE, LOW_BANDWIDTH } from "../../config";
+import { BATCH_REGISTRATION, CREDENTIAL_API, DEFAULT_BROWSER_PROFILE, BROWSER_MODE, LOW_BANDWIDTH, FAST_MODE, SKIP_PROXY_CHECK } from "../../config";
 import type { BatchRegistrationConfig, BatchProgress, AWSBuilderIDAccount, SessionState } from "../../types/aws-builder-id";
 
 /**
@@ -101,13 +101,24 @@ async function processEmailWorker(
 
     let accountProxy: WorkerProxy | undefined;
     if (useEnvProxy) {
-      logSession(workerLabel, `Finding valid proxy for account ${i}/${countPerEmail}...`);
-      const envProxy = await getNextValidProxy();
-      if (envProxy) {
-        accountProxy = envProxy;
+      if (SKIP_PROXY_CHECK) {
+        logSession(workerLabel, `Rotating proxy for account ${i}/${countPerEmail}...`);
+        const envProxy = getNextProxy();
+        if (envProxy) {
+          accountProxy = envProxy;
+        } else {
+          logSession(workerLabel, `No proxy configured, skipping account ${i}`);
+          continue;
+        }
       } else {
-        logSession(workerLabel, `No valid proxy found, skipping account ${i}`);
-        continue;
+        logSession(workerLabel, `Finding valid proxy for account ${i}/${countPerEmail}...`);
+        const envProxy = await getNextValidProxy();
+        if (envProxy) {
+          accountProxy = envProxy;
+        } else {
+          logSession(workerLabel, `No valid proxy found, skipping account ${i}`);
+          continue;
+        }
       }
     }
 
@@ -154,7 +165,7 @@ async function processEmailWorker(
       // Get a new proxy on retries
       if (retryCount > 0 && useEnvProxy) {
         logSession(workerLabel, `🔄 Retry ${retryCount}/${maxRetries} - getting new proxy...`);
-        const newProxy = await getNextValidProxy();
+        const newProxy = SKIP_PROXY_CHECK ? getNextProxy() : await getNextValidProxy();
         if (newProxy) {
           accountProxy = newProxy;
         } else {
@@ -198,7 +209,7 @@ async function processEmailWorker(
 
     // Small delay between accounts within same worker
     if (i < countPerEmail) {
-      await sleep(1000);
+      await sleep(FAST_MODE ? 200 : 1000);
     }
   }
 
@@ -305,7 +316,8 @@ export async function batchRegister(config: BatchRegistrationConfig): Promise<Ba
   const workers = baseInputs.map((baseInput, inputIndex) => {
     const startIndex = inputIndex * countPerEmail;
     // Stagger start times
-    return sleep(inputIndex * BATCH_REGISTRATION.STAGGER_DELAY).then(() =>
+    const staggerDelay = FAST_MODE ? 500 : BATCH_REGISTRATION.STAGGER_DELAY;
+    return sleep(inputIndex * staggerDelay).then(() =>
       processEmailWorker(
         baseInput,
         provider,

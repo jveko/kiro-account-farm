@@ -11,6 +11,7 @@ import { MailtmClient } from "../src/api/mailtm";
 import { FreemailClient } from "../src/api/freemail";
 import type { BatchProgress } from "../src/types/aws-builder-id";
 import type { EmailProvider } from "../src/types/provider";
+import { enableFastMode, enableSkipProxyCheck, FAST_MODE, SKIP_PROXY_CHECK } from "../src/config";
 
 function printUsage() {
   console.log(`
@@ -31,6 +32,8 @@ Arguments:
 Options:
   --provider    Email provider: gmail, simplelogin, mailtm, freemail (default: gmail)
   --parallel    Number of parallel workers (mailtm/freemail only, default: 1)
+  --fast        Reduce delays and skip mouse simulation for faster execution
+  --skip-proxy-check  Skip fraud/residential checks, just rotate proxy ports
   --help, -h    Show this help
 
 Examples:
@@ -67,12 +70,22 @@ async function main() {
   }
 
   // Parse positional arguments (exclude values of named flags)
-  const namedFlags = ["--provider", "--parallel"];
+  const namedFlags = ["--provider", "--parallel", "--fast", "--skip-proxy-check"];
   const positional = args.filter((a, i) => !a.startsWith("--") && (i === 0 || !namedFlags.includes(args[i - 1] || "")));
 
   // Parse --parallel flag
   const parallelIndex = args.indexOf("--parallel");
   const parallelCount = parallelIndex !== -1 ? parseInt(args[parallelIndex + 1] || "1", 10) : 1;
+
+  // Parse --fast flag
+  if (args.includes("--fast")) {
+    enableFastMode();
+  }
+
+  // Parse --skip-proxy-check flag
+  if (args.includes("--skip-proxy-check")) {
+    enableSkipProxyCheck();
+  }
 
   let baseInputs: string[];
   let countPerEmail: number;
@@ -158,6 +171,8 @@ async function main() {
   console.log(`   Count per email: ${countPerEmail}`);
   console.log(`   Total accounts: ${totalAccounts}`);
   console.log(`   Parallel workers: ${baseInputs.length}`);
+  if (FAST_MODE) console.log(`   ⚡ Fast mode enabled`);
+  if (SKIP_PROXY_CHECK) console.log(`   🔄 Proxy check skipped (rotation only)`);
   console.log(`\n⚠️  Manual verification code entry required\n`);
 
   const startTime = Date.now();

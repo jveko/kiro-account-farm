@@ -17,7 +17,7 @@ import { FreemailClient } from "../../api/freemail";
 import { SessionManager } from "./session";
 import { processPage, handleVerifyPage } from "./register";
 import { createPageAutomationContext } from "./context";
-import { AWS_BUILDER_ID, BROWSER_MODE, LOW_BANDWIDTH, TIMEOUTS } from "../../config";
+import { AWS_BUILDER_ID, BROWSER_MODE, LOW_BANDWIDTH, FAST_MODE, TIMEOUTS } from "../../config";
 import type { AWSBuilderIDAccount, SessionState, BatchProgress } from "../../types/aws-builder-id";
 import { enableResourceBlocking } from "../../utils/resource-blocker";
 
@@ -110,10 +110,10 @@ export async function registrationWorker(
       await authenticateProxy(localSession, page);
     }
 
-    // Block unnecessary resources in low bandwidth mode
-    if (LOW_BANDWIDTH) {
+    // Block unnecessary resources in low bandwidth or fast mode
+    if (LOW_BANDWIDTH || FAST_MODE) {
       await enableResourceBlocking(page);
-      logSession(account.email, "Low bandwidth mode: blocking images/fonts/css");
+      if (!FAST_MODE) logSession(account.email, "Low bandwidth mode: blocking images/fonts/css");
     }
 
     // Request logging disabled
@@ -121,7 +121,7 @@ export async function registrationWorker(
     // requestLogger.start();
 
     // Wait for browser to stabilize
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 500 : 2000));
 
     sessionManager.updateSession(sessionState.id, {
       browserId,
@@ -129,15 +129,15 @@ export async function registrationWorker(
 
     // Navigate to verification URL
     await page.goto(auth.verificationUriComplete, {
-      waitUntil: LOW_BANDWIDTH ? "domcontentloaded" : "networkidle2",
+      waitUntil: (LOW_BANDWIDTH || FAST_MODE) ? "domcontentloaded" : "networkidle2",
       timeout: TIMEOUTS.LONG,
     });
 
     // Detect stuck page — if body is empty or only has a spinner after initial load,
     // reload until content appears (common on slow proxies)
-    const maxReloads = 3;
+    const maxReloads = FAST_MODE ? 1 : 3;
     for (let reload = 0; reload < maxReloads; reload++) {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 2000 : 5000));
       const hasContent = await page.evaluate(() => {
         const body = document.body;
         if (!body) return false;
@@ -209,6 +209,16 @@ export async function registrationWorker(
           if (hasAwsError) {
             throw new IPBlockedError("AWS error: likely IP blocked");
           }
+        }
+
+        // Check for expired signup session ("Something doesn't compute")
+        const hasSessionExpired = await page.evaluate(() => {
+          const text = document.body?.innerText || "";
+          return text.includes("Something doesn't compute") ||
+            text.includes("couldn't verify your sign up session");
+        });
+        if (hasSessionExpired) {
+          throw new IPBlockedError("AWS error: signup session expired");
         }
 
         // Handle verify page — check on every iteration to catch OTP errors
@@ -296,9 +306,9 @@ export async function registrationWorker(
         if (result.success && result.pageType !== "verify") {
           // Password page has longer redirect - wait more
           if (result.pageType === "password") {
-            await new Promise((resolve) => setTimeout(resolve, 3000));
+            await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 1000 : 3000));
           } else {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+            await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 300 : 1000));
           }
         } else {
           // Poll every 500ms (like reference project)

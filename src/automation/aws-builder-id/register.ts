@@ -4,7 +4,7 @@
  */
 
 import type { Page } from "puppeteer-core";
-import { TIMEOUTS, WAIT, AUTOMATION_DELAYS } from "../../config";
+import { TIMEOUTS, WAIT, AUTOMATION_DELAYS, FAST_MODE } from "../../config";
 import type { AWSBuilderIDAccount, PageType } from "../../types/aws-builder-id";
 import type { PageAutomationContext } from "./context";
 import { randomMouseMovement, moveToElementAndClick } from "../../utils/human-mouse";
@@ -122,7 +122,9 @@ async function fastFill(page: Page, selector: string, text: string, maxRetries =
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       // Random mouse movement before filling (human-like behavior)
-      await randomMouseMovement(page);
+      if (!FAST_MODE) {
+        await randomMouseMovement(page);
+      }
 
       // Focus the input via JS first (bypasses any overlay that might intercept click)
       await page.evaluate((sel) => {
@@ -236,20 +238,26 @@ async function clickButton(page: Page, selector: string, maxWaitMs: number = 500
 
     if (!canClick) return false;
 
-    // Random mouse movement before clicking (human-like behavior)
-    await randomMouseMovement(page);
-
     await page.evaluate((sel) => {
       const btn = document.querySelector(sel) as HTMLButtonElement;
       if (btn) btn.scrollIntoView({ block: 'center', behavior: 'instant' });
     }, selector);
-    
-    // Use natural mouse movement to click
-    const clicked = await moveToElementAndClick(page, selector);
-    if (!clicked) {
-      // Fallback to direct click
+
+    if (FAST_MODE) {
+      // Direct JS click in fast mode — skip mouse simulation
       await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.BEFORE_CLICK));
       await page.click(selector);
+    } else {
+      // Random mouse movement before clicking (human-like behavior)
+      await randomMouseMovement(page);
+
+      // Use natural mouse movement to click
+      const clicked = await moveToElementAndClick(page, selector);
+      if (!clicked) {
+        // Fallback to direct click
+        await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.BEFORE_CLICK));
+        await page.click(selector);
+      }
     }
     
     await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.AFTER_CLICK));
@@ -406,7 +414,7 @@ export async function handlePasswordPage(page: Page, account: AWSBuilderIDAccoun
  * Handle device confirm page
  */
 export async function handleDeviceConfirmPage(page: Page): Promise<boolean> {
-  await new Promise((resolve) => setTimeout(resolve, WAIT.SHORT));
+  if (!FAST_MODE) await new Promise((resolve) => setTimeout(resolve, WAIT.SHORT));
 
   try {
     await page.waitForSelector('#cli_verification_btn', { timeout: TIMEOUTS.MEDIUM });
@@ -447,7 +455,7 @@ export async function handleDeviceConfirmPage(page: Page): Promise<boolean> {
  * Handle allow access page
  */
 export async function handleAllowAccessPage(page: Page): Promise<boolean> {
-  await new Promise((resolve) => setTimeout(resolve, WAIT.SHORT));
+  if (!FAST_MODE) await new Promise((resolve) => setTimeout(resolve, WAIT.SHORT));
 
   const btnSelector = 'button#cli_login_button, button[data-testid="allow-access-button"], input[type="submit"][value*="Allow"]';
   return await clickButton(page, btnSelector);
