@@ -5,6 +5,7 @@
 
 import { logGlobal, logSession } from "../../utils/logger";
 import { checkHealth, closeAllBrowsers, deleteAllBrowserProfiles, getOrCreateBrowserProfile, resetBrowserProfile } from "../../services/browser";
+import { closeAllLocalBrowsers, resetInstanceCount } from "../../services/browser-local";
 import { getNextValidProxy, isProxyConfigured, getCurrentPort } from "../../services/proxy";
 import { generateEmailAlias } from "../../utils/email-provider";
 import { generatePassword, generateName } from "../../utils/generators";
@@ -13,7 +14,7 @@ import { MailtmClient } from "../../api/mailtm";
 import { FreemailClient } from "../../api/freemail";
 import { SessionManager } from "./session";
 import { registrationWorker, IPBlockedError, type WorkerProxy } from "./worker";
-import { BATCH_REGISTRATION, CREDENTIAL_API, DEFAULT_BROWSER_PROFILE } from "../../config";
+import { BATCH_REGISTRATION, CREDENTIAL_API, DEFAULT_BROWSER_PROFILE, BROWSER_MODE, LOW_BANDWIDTH } from "../../config";
 import type { BatchRegistrationConfig, BatchProgress, AWSBuilderIDAccount, SessionState } from "../../types/aws-builder-id";
 
 /**
@@ -72,16 +73,18 @@ async function processEmailWorker(
   const workerLabel = `${inputLabel}-w${workerIndex}`;
   const profileName = `${DEFAULT_BROWSER_PROFILE}-${workerLabel}`;
 
-  // Create one browser profile for this worker
-  let browserId: string;
-  try {
-    logSession(workerLabel, `Creating browser profile...`);
-    const result = await getOrCreateBrowserProfile(profileName);
-    browserId = result.browserId;
-    logSession(workerLabel, `Browser profile ready: ${browserId}`);
-  } catch (error) {
-    logSession(workerLabel, `Failed to create browser profile:: ${error}`, "error");
-    return results;
+  // Create one browser profile for this worker (Roxy only — local mode creates per-launch)
+  let browserId: string = "";
+  if (BROWSER_MODE === "roxy") {
+    try {
+      logSession(workerLabel, `Creating browser profile...`);
+      const result = await getOrCreateBrowserProfile(profileName);
+      browserId = result.browserId;
+      logSession(workerLabel, `Browser profile ready: ${browserId}`);
+    } catch (error) {
+      logSession(workerLabel, `Failed to create browser profile:: ${error}`, "error");
+      return results;
+    }
   }
 
   for (let i = 1; i <= countPerEmail; i++) {
@@ -108,8 +111,8 @@ async function processEmailWorker(
       }
     }
 
-    // Reset browser profile before each account (randomize fingerprint, clear cache, update lang)
-    if (i > 1) {
+    // Reset browser profile before each account (Roxy only — local mode creates fresh per launch)
+    if (i > 1 && BROWSER_MODE === "roxy") {
       logSession(workerLabel, `Resetting browser profile for account ${i}...`);
       await resetBrowserProfile(browserId, profileName);
     }
@@ -158,7 +161,9 @@ async function processEmailWorker(
           logSession(workerLabel, `No valid proxy found for retry, skipping account ${i}`);
           break;
         }
-        await resetBrowserProfile(browserId, profileName);
+        if (BROWSER_MODE === "roxy") {
+          await resetBrowserProfile(browserId, profileName);
+        }
 
         // Recreate email provider client for retry (new mailbox for freemail)
         if (provider === "freemail") {
@@ -225,7 +230,12 @@ export async function batchRegister(config: BatchRegistrationConfig): Promise<Ba
     }
     
     logGlobal("Cleaning up browsers...");
-    await closeAllBrowsers();
+    if (BROWSER_MODE === "roxy") {
+      await closeAllBrowsers();
+    } else {
+      const closed = await closeAllLocalBrowsers();
+      if (closed > 0) logGlobal(`Closed ${closed} local browser(s)`);
+    }
   };
 
   let isCleaningUp = false;
@@ -253,21 +263,25 @@ export async function batchRegister(config: BatchRegistrationConfig): Promise<Ba
     process.exit(1);
   });
 
-  // Check Roxy Browser health first
-  logGlobal("Checking Roxy Browser connection...");
-  const isHealthy = await checkHealth();
-  if (!isHealthy) {
-    throw new Error("Roxy Browser is not running or not responding. Please start Roxy Browser first.");
-  }
-  logGlobal("✓ Roxy Browser is connected\n");
+  // Health check and cleanup (mode-dependent)
+  if (BROWSER_MODE === "roxy") {
+    logGlobal("Checking Roxy Browser connection...");
+    const isHealthy = await checkHealth();
+    if (!isHealthy) {
+      throw new Error("Roxy Browser is not running or not responding. Please start Roxy Browser first.");
+    }
+    logGlobal("✓ Roxy Browser is connected\n");
 
-  // Delete all existing browser profiles before starting
-  logGlobal("Cleaning up existing browser profiles...");
-  await deleteAllBrowserProfiles();
-  logGlobal("✓ Browser profiles cleaned\n");
+    logGlobal("Cleaning up existing browser profiles...");
+    await deleteAllBrowserProfiles();
+    logGlobal("✓ Browser profiles cleaned\n");
+  } else {
+    logGlobal("Using fingerprint-chromium (local mode)\n");
+    resetInstanceCount();
+  }
 
   const useEnvProxy = isProxyConfigured();
-  logGlobal(`Batch: ${totalAccounts} accounts (${baseInputs.length} inputs × ${countPerEmail} each)${useEnvProxy ? " (env proxy)" : ""}`);
+  logGlobal(`Batch: ${totalAccounts} accounts (${baseInputs.length} inputs × ${countPerEmail} each)${useEnvProxy ? " (env proxy)" : ""}${LOW_BANDWIDTH ? " (low bandwidth)" : ""}`);
 
   // Progress callback wrapper - only log on completion changes
   let lastLogged = { completed: 0, failed: 0 };
