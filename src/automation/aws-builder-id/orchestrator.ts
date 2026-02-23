@@ -88,6 +88,9 @@ async function processEmailWorker(
     }
   }
 
+  // Create one FreemailClient per worker (reused across accounts)
+  const freemailClient: FreemailClient | undefined = provider === "freemail" ? new FreemailClient() : undefined;
+
   for (let i = 1; i <= countPerEmail; i++) {
     const globalIndex = startIndex + i;
     const email = generateEmailAlias(provider, { baseInput, index: i });
@@ -143,12 +146,10 @@ async function processEmailWorker(
     }
 
     // For freemail: generate mailbox via API and override email/account
-    let freemailClient: FreemailClient | undefined;
     if (provider === "freemail") {
       try {
-        freemailClient = new FreemailClient();
         const domainIndex = freemailDomainCount ? (workerIndex + i - 1) % freemailDomainCount : 0;
-        const mailbox = await freemailClient.generateMailbox(domainIndex);
+        const mailbox = await freemailClient!.generateMailbox(domainIndex);
         // Override email with the server-generated address
         account.email = mailbox.email;
         logSession(workerLabel, `Freemail mailbox ready: ${mailbox.email}`);
@@ -180,9 +181,8 @@ async function processEmailWorker(
         // Recreate email provider client for retry (new mailbox for freemail)
         if (provider === "freemail") {
           try {
-            freemailClient = new FreemailClient();
             const retryDomainIndex = freemailDomainCount ? (workerIndex + i - 1) % freemailDomainCount : 0;
-            const mailbox = await freemailClient.generateMailbox(retryDomainIndex);
+            const mailbox = await freemailClient!.generateMailbox(retryDomainIndex);
             account.email = mailbox.email;
             logSession(workerLabel, `Freemail mailbox ready: ${mailbox.email}`);
           } catch (error) {
@@ -317,7 +317,7 @@ export async function batchRegister(config: BatchRegistrationConfig): Promise<Ba
   const workers = baseInputs.map((baseInput, inputIndex) => {
     const startIndex = inputIndex * countPerEmail;
     // Stagger start times
-    const staggerDelay = FAST_MODE ? 500 : BATCH_REGISTRATION.STAGGER_DELAY;
+    const staggerDelay = FAST_MODE ? 100 : BATCH_REGISTRATION.STAGGER_DELAY;
     return sleep(inputIndex * staggerDelay).then(() =>
       processEmailWorker(
         baseInput,

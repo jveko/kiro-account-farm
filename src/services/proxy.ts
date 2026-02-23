@@ -3,13 +3,18 @@
  * Handles static proxy config with auto-incrementing port and fraud score filtering
  */
 
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 
 const PORT_STATE_FILE = join(import.meta.dir, "../../.proxy-port-state");
 const USED_IPS_FILE = join(import.meta.dir, "../../.proxy-used-ips");
 const FRAUD_CHECK_URL = "https://my.ippure.com/v1/info";
 const FRAUD_SCORE_THRESHOLD = 30;
+
+// In-memory state initialized once from files
+let portCounter: number | null = null;
+const usedIpsSet: Set<string> = new Set();
+let usedIpsInitialized = false;
 
 export interface ProxyConfig {
   host: string;
@@ -27,30 +32,33 @@ interface FraudCheckResponse {
 }
 
 /**
- * Read used IPs from persistent file
+ * Load used IPs from file into memory (once)
  */
-function readUsedIps(): Set<string> {
+function initUsedIps(): void {
+  if (usedIpsInitialized) return;
   try {
     if (existsSync(USED_IPS_FILE)) {
       const content = readFileSync(USED_IPS_FILE, "utf-8").trim();
       if (content) {
-        return new Set(content.split("\n").filter(Boolean));
+        for (const ip of content.split("\n").filter(Boolean)) {
+          usedIpsSet.add(ip);
+        }
       }
     }
   } catch {
     // Ignore read errors
   }
-  return new Set();
+  usedIpsInitialized = true;
 }
 
 /**
- * Add IP to used IPs file
+ * Add IP to in-memory set and append to file
  */
 function addUsedIp(ip: string): void {
+  initUsedIps();
+  usedIpsSet.add(ip);
   try {
-    const usedIps = readUsedIps();
-    usedIps.add(ip);
-    writeFileSync(USED_IPS_FILE, Array.from(usedIps).join("\n"));
+    appendFileSync(USED_IPS_FILE, (usedIpsSet.size === 1 ? "" : "\n") + ip);
   } catch {
     // Ignore write errors
   }
@@ -60,14 +68,16 @@ function addUsedIp(ip: string): void {
  * Check if IP has been used before
  */
 function isIpUsed(ip: string): boolean {
-  const usedIps = readUsedIps();
-  return usedIps.has(ip);
+  initUsedIps();
+  return usedIpsSet.has(ip);
 }
 
 /**
- * Reset used IPs (clear the file)
+ * Reset used IPs (clear in-memory set and file)
  */
 export function resetUsedIps(): void {
+  usedIpsSet.clear();
+  usedIpsInitialized = true;
   try {
     writeFileSync(USED_IPS_FILE, "");
   } catch {
@@ -79,7 +89,8 @@ export function resetUsedIps(): void {
  * Get count of used IPs
  */
 export function getUsedIpsCount(): number {
-  return readUsedIps().size;
+  initUsedIps();
+  return usedIpsSet.size;
 }
 
 /**
@@ -109,21 +120,25 @@ function getBasePort(): number {
 }
 
 /**
- * Read current port from state file
+ * Initialize port counter from file (once)
  */
-function readPortState(): number {
-  try {
-    if (existsSync(PORT_STATE_FILE)) {
-      const content = readFileSync(PORT_STATE_FILE, "utf-8").trim();
-      const port = parseInt(content, 10);
-      if (!isNaN(port)) {
-        return port;
+function initPortCounter(): number {
+  if (portCounter === null) {
+    try {
+      if (existsSync(PORT_STATE_FILE)) {
+        const content = readFileSync(PORT_STATE_FILE, "utf-8").trim();
+        const port = parseInt(content, 10);
+        if (!isNaN(port)) {
+          portCounter = port;
+          return portCounter;
+        }
       }
+    } catch {
+      // Ignore read errors
     }
-  } catch {
-    // Ignore read errors
+    portCounter = getBasePort();
   }
-  return getBasePort();
+  return portCounter;
 }
 
 /**
@@ -147,9 +162,9 @@ export function getNextProxy(): ProxyConfig | null {
     return null;
   }
 
-  const currentPort = readPortState();
-  const nextPort = currentPort + 1;
-  writePortState(nextPort);
+  const currentPort = initPortCounter();
+  portCounter = currentPort + 1;
+  writePortState(portCounter);
 
   return {
     ...baseConfig,
@@ -168,14 +183,15 @@ export function isProxyConfigured(): boolean {
  * Reset port counter to base
  */
 export function resetPortCounter(): void {
-  writePortState(getBasePort());
+  portCounter = getBasePort();
+  writePortState(portCounter);
 }
 
 /**
  * Get current port (without incrementing)
  */
 export function getCurrentPort(): number {
-  return readPortState();
+  return initPortCounter();
 }
 
 /**
@@ -222,9 +238,9 @@ export async function getNextValidProxy(maxAttempts = 1000): Promise<ProxyConfig
   }
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const currentPort = readPortState();
-    const nextPort = currentPort + 1;
-    writePortState(nextPort);
+    const currentPort = initPortCounter();
+    portCounter = currentPort + 1;
+    writePortState(portCounter);
 
     const proxy: ProxyConfig = {
       ...baseConfig,

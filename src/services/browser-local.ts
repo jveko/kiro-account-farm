@@ -4,11 +4,14 @@
  */
 import puppeteer, { type Browser } from "puppeteer-core";
 import { getLogger } from "@logtape/logtape";
-import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from "fs";
+import { existsSync } from "fs";
+import { rm, mkdir } from "fs/promises";
 import { join } from "path";
 import type { Proxy } from "./browser";
 
 const logger = getLogger(["local", "browser"]);
+
+const HEADLESS = Bun.env.HEADLESS === "true" || Bun.env.HEADLESS === "1";
 
 // Default path for fingerprint-chromium binary
 const DEFAULT_CHROMIUM_PATH = join(
@@ -147,22 +150,22 @@ export async function launchLocalBrowser(
 
   // Wipe profile directory to prevent cache/cookie leakage between accounts
   try {
-    if (existsSync(userDataDir)) {
-      rmSync(userDataDir, { recursive: true, force: true });
-    }
-    mkdirSync(userDataDir, { recursive: true });
+    await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
+    await mkdir(userDataDir, { recursive: true });
   } catch {
     // Ignore — directory may be locked or not exist
   }
 
   // Position window using slot pool (reuses positions from closed browsers)
   const slot = acquireSlot();
-  const col = slot % 3;
-  const row = Math.floor(slot / 3);
-  const windowWidth = 640;
-  const windowHeight = 480;
-  args.push(`--window-size=${windowWidth},${windowHeight}`);
-  args.push(`--window-position=${col * windowWidth},${row * windowHeight}`);
+  if (!HEADLESS) {
+    const col = slot % 3;
+    const row = Math.floor(slot / 3);
+    const windowWidth = 640;
+    const windowHeight = 480;
+    args.push(`--window-size=${windowWidth},${windowHeight}`);
+    args.push(`--window-position=${col * windowWidth},${row * windowHeight}`);
+  }
 
   const platform = args.find((a) => a.startsWith("--fingerprint-platform="))?.split("=")[1];
   logger.info("Launching fingerprint-chromium (seed={seed}, platform={platform})", {
@@ -172,7 +175,7 @@ export async function launchLocalBrowser(
 
   const browser = await puppeteer.launch({
     executablePath,
-    headless: false,
+    headless: HEADLESS,
     args,
     defaultViewport: null,
   });

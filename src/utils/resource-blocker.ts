@@ -46,14 +46,10 @@ export async function enableResourceBlocking(page: Page): Promise<void> {
     }
 
     // Block known tracking/analytics domains
-    try {
-      const hostname = new URL(request.url()).hostname;
-      if (BLOCKED_DOMAINS.some((domain) => hostname.endsWith(domain))) {
-        request.abort().catch(() => {});
-        return;
-      }
-    } catch {
-      // Invalid URL — let it through
+    const url = request.url();
+    if (BLOCKED_DOMAINS.some((domain) => url.includes(domain))) {
+      request.abort().catch(() => {});
+      return;
     }
 
     request.continue().catch(() => {});

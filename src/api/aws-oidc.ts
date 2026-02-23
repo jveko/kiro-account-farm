@@ -27,7 +27,7 @@ async function fetchWithRetry(
     } catch (error) {
       lastError = error as Error;
       if (attempt < maxRetries - 1) {
-        const delay = baseDelayMs * Math.pow(2, attempt);
+        const delay = baseDelayMs * Math.pow(2, attempt) * (0.7 + Math.random() * 0.6);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -216,8 +216,9 @@ export class AWSDeviceAuthClient {
         return token;
       }
 
-      // Wait before next poll
-      await new Promise((resolve) => setTimeout(resolve, interval));
+      // Wait before next poll (with jitter to avoid thundering herd)
+      const jitteredInterval = interval + Math.floor(Math.random() * 500);
+      await new Promise((resolve) => setTimeout(resolve, jitteredInterval));
     }
 
     throw new Error("Token polling timeout - authorization not completed");

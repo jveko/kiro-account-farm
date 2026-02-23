@@ -121,7 +121,7 @@ export async function registrationWorker(
     // requestLogger.start();
 
     // Wait for browser to stabilize
-    await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 500 : 2000));
+    await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 200 : 1000));
 
     sessionManager.updateSession(sessionState.id, {
       browserId,
@@ -137,7 +137,7 @@ export async function registrationWorker(
     // reload until content appears (common on slow proxies)
     const maxReloads = FAST_MODE ? 1 : 3;
     for (let reload = 0; reload < maxReloads; reload++) {
-      await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 2000 : 5000));
+      await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 1000 : 3000));
       const hasContent = await page.evaluate(() => {
         const body = document.body;
         if (!body) return false;
@@ -341,7 +341,7 @@ export async function registrationWorker(
     const token = await oidcClient.pollToken(AWS_BUILDER_ID.TOKEN_POLL_TIMEOUT);
 
     // Validate token immediately after acquisition
-    const validationResult = await validateToken(token.accessToken);
+    const validationResult = await validateToken(token.accessToken, proxy);
     const tokenStatus = validationResult.status;
 
     if (tokenStatus === "valid") {
