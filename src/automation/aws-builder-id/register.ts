@@ -27,75 +27,69 @@ function getPageId(page: Page, pageType: PageType): string {
  */
 export async function detectPageType(page: Page): Promise<PageType> {
   const url = page.url();
-  const text = await page.evaluate(() => document.body?.innerText || "");
 
-  // Device confirm page - check FIRST (before complete, as URL overlaps)
+  // URL-only checks first (no IPC needed)
   if (url.includes("awsapps.com") && url.includes("#/device?user_code=")) {
     return "device_confirm";
   }
-  const confirmBtn = await page.$('#cli_verification_btn');
-  if (confirmBtn) {
-    return "device_confirm";
-  }
-  if (text.includes("Confirm and continue") || text.includes("confirm this code")) {
-    return "device_confirm";
-  }
-
-  // Complete page - check text
-  if (
-    text.includes("Request approved") ||
-    text.includes("You can close this window")
-  ) {
-    return "complete";
-  }
-
-  // Allow access page
-  const allowBtn = await page.$(
-    'button#cli_login_button, button[data-testid="allow-access-button"], input[type="submit"][value*="Allow"]'
-  );
-  if (allowBtn) {
-    return "allow_access";
-  }
-  if ((text.includes("Allow access") || text.includes("allow access")) && url.includes("awsapps.com")) {
-    return "allow_access";
-  }
-
-  // Verification page - check URL first (most reliable)
   if (url.includes("verify-otp") || url.includes("/verification") || url.includes("verifyEmail")) {
     return "verify";
   }
-  // Also check for verification-specific elements
-  if (text.includes("Verify your email") || text.includes("verification code")) {
+  if (url.includes("/signup?registrationCode=")) {
+    return "password";
+  }
+  if (url.includes("#/signup/start")) {
+    return "name";
+  }
+
+  // Single IPC round-trip for all DOM checks
+  const domState = await page.evaluate(() => {
+    const text = document.body?.innerText || "";
+    const qs = (sel: string) => !!document.querySelector(sel);
+    return {
+      text,
+      hasConfirmBtn: qs('#cli_verification_btn'),
+      hasAllowBtn: qs('button#cli_login_button, button[data-testid="allow-access-button"], input[type="submit"][value*="Allow"]'),
+      hasPwdInputs: qs('input[placeholder="Enter password"], input[type="password"][autocomplete="off"]') &&
+        qs('input[placeholder="Re-enter password"], input[data-testid="test-retype-input"]'),
+      hasNameInput: qs('input[data-testid="signup-full-name-input"], input[placeholder="Maria José Silva"]'),
+      hasEmailInput: qs('input[placeholder="username@example.com"], input[type="text"][autocomplete="on"]'),
+    };
+  });
+
+  // Device confirm
+  if (domState.hasConfirmBtn) return "device_confirm";
+  if (domState.text.includes("Confirm and continue") || domState.text.includes("confirm this code")) {
+    return "device_confirm";
+  }
+
+  // Complete
+  if (domState.text.includes("Request approved") || domState.text.includes("You can close this window")) {
+    return "complete";
+  }
+
+  // Allow access
+  if (domState.hasAllowBtn) return "allow_access";
+  if ((domState.text.includes("Allow access") || domState.text.includes("allow access")) && url.includes("awsapps.com")) {
+    return "allow_access";
+  }
+
+  // Verify
+  if (domState.text.includes("Verify your email") || domState.text.includes("verification code")) {
     return "verify";
   }
 
-  // Password page - check URL and text content
-  if (url.includes("/signup?registrationCode=") || text.includes("Create your password")) {
-    return "password";
-  }
-  // Also check for both password inputs
-  const pwdInput = await page.$('input[placeholder="Enter password"], input[type="password"][autocomplete="off"]');
-  const confirmPwdInput = await page.$('input[placeholder="Re-enter password"], input[data-testid="test-retype-input"]');
-  if (pwdInput && confirmPwdInput) {
-    return "password";
-  }
+  // Password
+  if (domState.text.includes("Create your password")) return "password";
+  if (domState.hasPwdInputs) return "password";
 
-  // Name page - check URL and text content
-  if (url.includes("#/signup/start") || text.includes("Enter your name")) {
-    return "name";
-  }
-  // Also check for name input with data-testid
-  const nameInput = await page.$('input[data-testid="signup-full-name-input"], input[placeholder="Maria José Silva"]');
-  if (nameInput) {
-    return "name";
-  }
+  // Name
+  if (domState.text.includes("Enter your name")) return "name";
+  if (domState.hasNameInput) return "name";
 
-  // Login page - check URL and text content
-  if (url.includes("/login?workflowStateHandle=") || text.includes("Get started")) {
-    const emailInput = await page.$('input[placeholder="username@example.com"], input[type="text"][autocomplete="on"]');
-    if (emailInput) {
-      return "login";
-    }
+  // Login
+  if ((url.includes("/login?workflowStateHandle=") || domState.text.includes("Get started")) && domState.hasEmailInput) {
+    return "login";
   }
 
   return "unknown";
