@@ -409,7 +409,7 @@ export async function handleDeviceConfirmPage(page: Page): Promise<boolean> {
   await new Promise((resolve) => setTimeout(resolve, WAIT.SHORT));
 
   try {
-    await page.waitForSelector('#cli_verification_btn', { timeout: 5000 });
+    await page.waitForSelector('#cli_verification_btn', { timeout: TIMEOUTS.MEDIUM });
 
     // Dismiss any overlay that might block the button (cookie banner, password manager)
     await page.evaluate(() => {

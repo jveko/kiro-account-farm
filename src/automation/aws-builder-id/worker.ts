@@ -7,6 +7,7 @@ import type { Browser } from "puppeteer-core";
 import { AWSDeviceAuthClient } from "../../api/aws-oidc";
 import { validateToken } from "../../api/token-validator";
 import { configureBrowserProxy, configureBrowserFingerprint, openBrowser, closeBrowser } from "../../services/browser";
+import { launchLocalBrowser, closeLocalBrowser, authenticateProxy, type LocalBrowserSession } from "../../services/browser-local";
 import { logSession } from "../../utils/logger";
 // import { createRequestLogger, type RequestLogger } from "../../utils/request-logger";
 import { fetchOtp } from "../../utils/email-provider";
@@ -16,8 +17,9 @@ import { FreemailClient } from "../../api/freemail";
 import { SessionManager } from "./session";
 import { processPage, handleVerifyPage } from "./register";
 import { createPageAutomationContext } from "./context";
-import { AWS_BUILDER_ID } from "../../config";
+import { AWS_BUILDER_ID, BROWSER_MODE, LOW_BANDWIDTH, TIMEOUTS } from "../../config";
 import type { AWSBuilderIDAccount, SessionState, BatchProgress } from "../../types/aws-builder-id";
+import { enableResourceBlocking } from "../../utils/resource-blocker";
 
 export interface WorkerProxy {
   username: string;
@@ -55,6 +57,7 @@ export async function registrationWorker(
 ): Promise<SessionState> {
   const sessionState = sessionManager.createSession(account);
   let browser: Browser | null = null;
+  let localSession: LocalBrowserSession | null = null;
   // let requestLogger: RequestLogger | null = null;
   const browserId = existingBrowserId || "";
   const profileName = existingProfileName || "default";
@@ -76,16 +79,22 @@ export async function registrationWorker(
       oidcAuth: auth,
     });
 
-    // Step 2: Configure browser with proxy and open it
-    logSession(account.email, "Starting browser...");
-    
-    if (proxy) {
-      await configureBrowserProxy(browserId, proxy, profileName);
-    } else {
-      await configureBrowserFingerprint(browserId, profileName);
-    }
+    // Step 2: Launch browser (Roxy or local fingerprint-chromium)
+    logSession(account.email, `Starting browser (${BROWSER_MODE})...`);
 
-    browser = await openBrowser(browserId);
+    if (BROWSER_MODE === "local") {
+      // Use unique profile per account to ensure clean state
+      const uniqueProfile = `${profileName}-${sessionState.id}`;
+      localSession = await launchLocalBrowser(proxy, uniqueProfile);
+      browser = localSession.browser;
+    } else {
+      if (proxy) {
+        await configureBrowserProxy(browserId, proxy, profileName);
+      } else {
+        await configureBrowserFingerprint(browserId, profileName);
+      }
+      browser = await openBrowser(browserId);
+    }
 
     // Verify browser is connected
     if (!browser.isConnected()) {
@@ -95,6 +104,17 @@ export async function registrationWorker(
     // Get or create page
     const pages = await browser.pages();
     const page = pages[0] || (await browser.newPage());
+
+    // Authenticate proxy via CDP (local mode only)
+    if (BROWSER_MODE === "local" && localSession) {
+      await authenticateProxy(localSession, page);
+    }
+
+    // Block unnecessary resources in low bandwidth mode
+    if (LOW_BANDWIDTH) {
+      await enableResourceBlocking(page);
+      logSession(account.email, "Low bandwidth mode: blocking images/fonts/css");
+    }
 
     // Request logging disabled
     // requestLogger = createRequestLogger(page, sessionState.id);
@@ -109,136 +129,195 @@ export async function registrationWorker(
 
     // Navigate to verification URL
     await page.goto(auth.verificationUriComplete, {
-      waitUntil: "networkidle2",
-      timeout: 60000
+      waitUntil: LOW_BANDWIDTH ? "domcontentloaded" : "networkidle2",
+      timeout: TIMEOUTS.LONG,
     });
+
+    // Detect stuck page — if body is empty or only has a spinner after initial load,
+    // reload until content appears (common on slow proxies)
+    const maxReloads = 3;
+    for (let reload = 0; reload < maxReloads; reload++) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const hasContent = await page.evaluate(() => {
+        const body = document.body;
+        if (!body) return false;
+        const text = body.innerText?.trim() || "";
+        // Check if any meaningful form elements or text are present
+        const hasInputs = document.querySelectorAll("input, button, form").length > 0;
+        return text.length > 50 || hasInputs;
+      }).catch(() => false);
+
+      if (hasContent) break;
+
+      logSession(account.email, `Page appears stuck, reloading... (${reload + 1}/${maxReloads})`);
+      await page.reload({
+        waitUntil: LOW_BANDWIDTH ? "domcontentloaded" : "networkidle2",
+        timeout: TIMEOUTS.LONG,
+      }).catch(() => {});
+    }
 
     logSession(account.email, "Navigated to AWS signup");
 
     // Step 3: Automate registration flow with faster polling
     let attempts = 0;
-    const maxAttempts = 120; // 120 attempts * 500ms = 60 seconds max
+    const maxAttempts = LOW_BANDWIDTH ? 240 : 120; // 240 attempts * 500ms = 120s for low bandwidth
     let lastPageType: string = "";
     let verificationMessageShown = false;
     let otpRetryCount = 0;
-    const maxOtpRetries = 3;
+    const maxOtpRetries = 5;
+    let stuckPageCount = 0; // Track consecutive stuck iterations for reload
 
     while (attempts < maxAttempts) {
-      const result = await processPage(page, account, ctx);
+      // Wrap the entire iteration in try/catch to handle context destruction
+      // during page transitions (common on slow connections)
+      try {
+        const result = await processPage(page, account, ctx);
 
-      // Only log on page type change (not on every attempt)
-      if (result.pageType !== lastPageType && result.pageType !== "unknown") {
-        if (result.pageType !== "complete" && result.pageType !== "verify") {
-          logSession(account.email, `→ ${result.pageType}`);
+        // Detect stuck page — same page type for too many iterations means page didn't load
+        if (result.pageType === lastPageType || result.pageType === "unknown") {
+          stuckPageCount++;
+        } else {
+          stuckPageCount = 0;
         }
-        lastPageType = result.pageType;
-      }
 
-      // Check for AWS generic error alert (likely IP blocked) — but not on verify page
-      // On verify page, this error means OTP submission failed, not IP blocked
-      if (result.pageType !== "verify") {
-        const hasAwsError = await page.evaluate(() => {
-          const text = document.body?.innerText || "";
-          return text.includes("there was an error processing your request");
-        });
-        if (hasAwsError) {
-          throw new IPBlockedError("AWS error: likely IP blocked");
+        // If stuck for 20+ iterations (~10s), try reloading the page
+        if (stuckPageCount > 0 && stuckPageCount % 20 === 0) {
+          logSession(account.email, `Page stuck on "${result.pageType}" for ${stuckPageCount} iterations, reloading...`);
+          await page.reload({
+            waitUntil: LOW_BANDWIDTH ? "domcontentloaded" : "networkidle2",
+            timeout: TIMEOUTS.LONG,
+          }).catch(() => {});
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          ctx.processedPages.clear(); // Allow re-processing after reload
         }
-      }
 
-      // Handle verify page — check on every iteration to catch OTP errors
-      if (result.pageType === "verify") {
-        const hasOtpError = await page.evaluate(() => {
-          const text = document.body?.innerText || "";
-          return text.includes("that code didn't work") ||
-            text.includes("try again") ||
-            text.includes("there was an error processing your request");
-        });
-
-        if (!verificationMessageShown || hasOtpError) {
-          if (hasOtpError) {
-            otpRetryCount++;
-            if (otpRetryCount > maxOtpRetries) {
-              throw new Error(`OTP verification failed after ${maxOtpRetries} retries`);
-            }
-            logSession(account.email, `⚠ OTP rejected, retrying... (${otpRetryCount}/${maxOtpRetries})`, "warn");
-            // Click "Resend code" if available
-            try {
-              const resendBtn = await page.$('button[data-testid="email-verification-resend-button"], button:has-text("Resend")');
-              if (resendBtn) {
-                await resendBtn.click();
-                await new Promise((resolve) => setTimeout(resolve, 3000));
-                logSession(account.email, "📧 Resend code clicked");
-              }
-            } catch {
-              // Resend button not found - continue with polling anyway
-            }
-          } else {
-            logSession(account.email, `📧 Polling ${provider === "mailtm" ? "Mail.tm" : provider === "freemail" ? "Freemail" : "Gmail"} for OTP...`);
+        // Only log on page type change (not on every attempt)
+        if (result.pageType !== lastPageType && result.pageType !== "unknown") {
+          if (result.pageType !== "complete" && result.pageType !== "verify") {
+            logSession(account.email, `→ ${result.pageType}`);
           }
-          verificationMessageShown = true;
-          
-          // Fetch OTP with polling and auto-fill
-          const otpResult = await fetchOtp(
-            provider,
-            account.email,
-            45,  // 45 attempts
-            2000, // 2 second intervals = 90 seconds max
-            (attempt, max) => {
-              if (attempt % 5 === 0) {
-                logSession(account.email, `📧 Polling... (${attempt}/${max})`);
-              }
-            },
-            mailtmClient,
-            freemailClient
-          );
-          
-          if (otpResult.success && otpResult.code) {
-            logSession(account.email, `✓ OTP received: ${otpResult.code}`);
-            await handleVerifyPage(page, otpResult.code);
-          } else {
-            logSession(account.email, `⚠ OTP fetch failed: ${otpResult.error}`, "warn");
+          lastPageType = result.pageType;
+        }
+
+        // Check for AWS generic error alert (likely IP blocked) — but not on verify page
+        // On verify page, this error means OTP submission failed, not IP blocked
+        if (result.pageType !== "verify") {
+          const hasAwsError = await page.evaluate(() => {
+            const text = document.body?.innerText || "";
+            return text.includes("there was an error processing your request");
+          });
+          if (hasAwsError) {
+            throw new IPBlockedError("AWS error: likely IP blocked");
           }
         }
-      }
 
-      if (result.pageType === "complete") {
-        logSession(account.email, "✓ Registration done");
-        break;
-      }
+        // Handle verify page — check on every iteration to catch OTP errors
+        if (result.pageType === "verify") {
+          const hasOtpError = await page.evaluate(() => {
+            const text = document.body?.innerText || "";
+            return text.includes("that code didn't work") ||
+              text.includes("try again") ||
+              text.includes("there was an error processing your request");
+          });
 
-      if (!result.success && result.error && result.error !== "Already processed") {
-        // Navigation errors are expected during page transitions - continue polling
-        if (result.error.includes("navigation") || result.error.includes("context was destroyed")) {
+          if (!verificationMessageShown || hasOtpError) {
+            if (hasOtpError) {
+              otpRetryCount++;
+              if (otpRetryCount > maxOtpRetries) {
+                throw new Error(`OTP verification failed after ${maxOtpRetries} retries`);
+              }
+              logSession(account.email, `⚠ OTP rejected, retrying... (${otpRetryCount}/${maxOtpRetries})`, "warn");
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+              // Click "Resend code" if available
+              try {
+                const resendBtn = await page.$('button[data-testid="email-verification-resend-button"], button:has-text("Resend")');
+                if (resendBtn) {
+                  await resendBtn.click();
+                  await new Promise((resolve) => setTimeout(resolve, 3000));
+                  logSession(account.email, "📧 Resend code clicked");
+                }
+              } catch {
+                // Resend button not found - continue with polling anyway
+              }
+            } else {
+              logSession(account.email, `📧 Polling ${provider === "mailtm" ? "Mail.tm" : provider === "freemail" ? "Freemail" : "Gmail"} for OTP...`);
+            }
+            verificationMessageShown = true;
+            
+            // Fetch OTP with polling and auto-fill
+            const otpResult = await fetchOtp(
+              provider,
+              account.email,
+              45,  // 45 attempts
+              2000, // 2 second intervals = 90 seconds max
+              (attempt, max) => {
+                if (attempt % 5 === 0) {
+                  logSession(account.email, `📧 Polling... (${attempt}/${max})`);
+                }
+              },
+              mailtmClient,
+              freemailClient
+            );
+            
+            if (otpResult.success && otpResult.code) {
+              logSession(account.email, `✓ OTP received: ${otpResult.code}`);
+              await handleVerifyPage(page, otpResult.code);
+            } else {
+              logSession(account.email, `⚠ OTP fetch failed: ${otpResult.error}`, "warn");
+            }
+          }
+        }
+
+        if (result.pageType === "complete") {
+          logSession(account.email, "✓ Registration done");
+          break;
+        }
+
+        if (!result.success && result.error && result.error !== "Already processed") {
+          // Navigation errors are expected during page transitions - continue polling
+          if (result.error.includes("navigation") || result.error.includes("context was destroyed")) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            attempts++;
+            continue;
+          }
+          logSession(account.email, `Error: ${result.error}`, "error");
+          throw new Error(`Page processing failed: ${result.error}`);
+        }
+
+        if (result.pageType === "unknown") {
+          // Like reference project: continue polling, don't fail immediately
+          // Page may still be loading
           await new Promise((resolve) => setTimeout(resolve, 500));
           attempts++;
           continue;
         }
-        logSession(account.email, `Error: ${result.error}`, "error");
-        throw new Error(`Page processing failed: ${result.error}`);
-      }
 
-      if (result.pageType === "unknown") {
-        // Like reference project: continue polling, don't fail immediately
-        // Page may still be loading
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        attempts++;
-        continue;
-      }
-
-      // If page was successfully processed, wait for navigation
-      if (result.success && result.pageType !== "verify") {
-        // Password page has longer redirect - wait more
-        if (result.pageType === "password") {
-          await new Promise((resolve) => setTimeout(resolve, 3000));
+        // If page was successfully processed, wait for navigation
+        if (result.success && result.pageType !== "verify") {
+          // Password page has longer redirect - wait more
+          if (result.pageType === "password") {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+          } else {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
         } else {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          // Poll every 500ms (like reference project)
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
-      } else {
-        // Poll every 500ms (like reference project)
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        attempts++;
+      } catch (error) {
+        // Re-throw fatal errors
+        if (error instanceof IPBlockedError) throw error;
+
+        const msg = error instanceof Error ? error.message : String(error);
+        // Context destruction during navigation is expected — just retry
+        if (msg.includes("context was destroyed") || msg.includes("Execution context") || msg.includes("navigation")) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          attempts++;
+          continue;
+        }
+        throw error;
       }
-      attempts++;
     }
 
     if (attempts >= maxAttempts) {
@@ -275,7 +354,9 @@ export async function registrationWorker(
     // }
 
     // Close browser
-    if (browser && browserId) {
+    if (BROWSER_MODE === "local" && localSession) {
+      await closeLocalBrowser(localSession);
+    } else if (browser && browserId) {
       await closeBrowser(browser, browserId);
     }
 
@@ -293,7 +374,13 @@ export async function registrationWorker(
     });
 
     // Close browser on error
-    if (browser && browserId) {
+    if (BROWSER_MODE === "local" && localSession) {
+      try {
+        await closeLocalBrowser(localSession);
+      } catch {
+        // Ignore cleanup errors
+      }
+    } else if (browser && browserId) {
       try {
         await closeBrowser(browser, browserId);
       } catch {
