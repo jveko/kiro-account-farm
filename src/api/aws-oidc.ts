@@ -3,11 +3,37 @@
  * Direct AWS API calls for device authorization flow
  */
 
-import { AWS_BUILDER_ID, URLS } from "../config";
+import { AWS_BUILDER_ID, URLS, LOW_BANDWIDTH } from "../config";
 import { generateUUID } from "../utils/generators";
 import { createProxyFetch } from "../utils/fetch";
 import type { ProxyConfig } from "../services/proxy";
 import type { OIDCClientInfo, OIDCAuthInfo, TokenInfo } from "../types/aws-builder-id";
+
+/**
+ * Retry a fetch call with exponential backoff
+ */
+async function fetchWithRetry(
+  fetcher: (url: string | URL | Request, init?: RequestInit) => Promise<Response>,
+  url: string,
+  init: RequestInit,
+  maxRetries: number = LOW_BANDWIDTH ? 5 : 3,
+  baseDelayMs: number = LOW_BANDWIDTH ? 2000 : 1000,
+): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetcher(url, init);
+      return response;
+    } catch (error) {
+      lastError = error as Error;
+      if (attempt < maxRetries - 1) {
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+  throw lastError!;
+}
 
 interface RegisterClientResponse {
   clientId: string;
@@ -68,7 +94,7 @@ export class AWSDeviceAuthClient {
       issuerUrl: AWS_BUILDER_ID.ISSUER_URL,
     };
 
-    const response = await this.proxyFetch(`${URLS.AWS_OIDC_BASE}/client/register`, {
+    const response = await fetchWithRetry(this.proxyFetch, `${URLS.AWS_OIDC_BASE}/client/register`, {
       method: "POST",
       headers: getOidcHeaders(),
       body: JSON.stringify(payload),
@@ -102,7 +128,7 @@ export class AWSDeviceAuthClient {
       startUrl: URLS.AWS_BUILDER_ID_START,
     };
 
-    const response = await this.proxyFetch(`${URLS.AWS_OIDC_BASE}/device_authorization`, {
+    const response = await fetchWithRetry(this.proxyFetch, `${URLS.AWS_OIDC_BASE}/device_authorization`, {
       method: "POST",
       headers: getOidcHeaders(),
       body: JSON.stringify(payload),
@@ -151,7 +177,7 @@ export class AWSDeviceAuthClient {
       grantType: "urn:ietf:params:oauth:grant-type:device_code",
     };
 
-    const response = await this.proxyFetch(`${URLS.AWS_OIDC_BASE}/token`, {
+    const response = await fetchWithRetry(this.proxyFetch, `${URLS.AWS_OIDC_BASE}/token`, {
       method: "POST",
       headers: getOidcHeaders(),
       body: JSON.stringify(payload),
