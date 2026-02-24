@@ -53,7 +53,7 @@ export async function detectPageType(page: Page): Promise<PageType> {
       hasPwdInputs: qs('input[placeholder="Enter password"], input[type="password"][autocomplete="off"]') &&
         qs('input[placeholder="Re-enter password"], input[data-testid="test-retype-input"]'),
       hasNameInput: qs('input[data-testid="signup-full-name-input"], input[placeholder="Maria José Silva"]'),
-      hasEmailInput: qs('input[placeholder="username@example.com"], input[type="text"][autocomplete="on"]'),
+      hasEmailInput: qs('input[placeholder="username@example.com"]'),
     };
   });
 
