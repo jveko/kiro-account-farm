@@ -85,10 +85,10 @@ export async function detectPageType(page: Page): Promise<PageType> {
 
   // Signup (combined email + name page)
   if (domState.hasNameInput && domState.hasEmailInput) return "signup";
+  if (url.includes("#/signup/enter-email") && domState.hasNameInput) return "signup";
 
-  // Name
-  if (domState.text.includes("Enter your name")) return "name";
-  if (domState.hasNameInput) return "name";
+  // Name (name-only page, no email field)
+  if (domState.hasNameInput && !domState.hasEmailInput) return "name";
 
   // Login
   if ((url.includes("/login?workflowStateHandle=") || domState.text.includes("Get started")) && domState.hasEmailInput) {
