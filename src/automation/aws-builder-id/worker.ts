@@ -212,7 +212,20 @@ export async function registrationWorker(
           const maxPageErrorRetries = 3;
           let pageErrorResolved = false;
           for (let per = 1; per <= maxPageErrorRetries; per++) {
-            logSession(account.email, `⚠ AWS error detected, waiting and retrying... (${per}/${maxPageErrorRetries})`, "warn");
+            logSession(account.email, `⚠ AWS error detected, clicking submit again... (${per}/${maxPageErrorRetries})`, "warn");
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            const btnSelectors = [
+              'button[data-testid="signup-next-button"]',
+              'button[data-testid="test-primary-button"]',
+              'button[type="submit"]'
+            ];
+            for (const btn of btnSelectors) {
+              const exists = await page.$(btn);
+              if (exists) {
+                await page.click(btn).catch(() => {});
+                break;
+              }
+            }
             await new Promise((resolve) => setTimeout(resolve, 3000));
             const retryErrors = await page.evaluate(() => {
               const text = document.body?.innerText || "";
@@ -223,7 +236,7 @@ export async function registrationWorker(
               };
             });
             if (!retryErrors.sessionExpired && !retryErrors.awsError) {
-              logSession(account.email, `✓ AWS error resolved`);
+              logSession(account.email, `✓ AWS error resolved after retry`);
               pageErrorResolved = true;
               break;
             }

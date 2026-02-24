@@ -38,8 +38,9 @@ export async function detectPageType(page: Page): Promise<PageType> {
   if (url.includes("/signup?registrationCode=")) {
     return "password";
   }
-  if (url.includes("#/signup/start")) {
-    return "name";
+  if (url.includes("#/signup/enter-email") || url.includes("#/signup/start")) {
+    // Could be name-only or combined email+name — need DOM check
+    // Fall through to DOM-based detection below
   }
 
   // Single IPC round-trip for all DOM checks
