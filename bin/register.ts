@@ -194,7 +194,7 @@ async function main() {
     // Export results to output directory
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
     const outputFile = join("output", `kiro-accounts-${timestamp}.json`);
-    exportResults(progress, outputFile);
+    await exportResults(progress, outputFile);
 
     console.log(`\n✅ Completed in ${duration}s`);
 

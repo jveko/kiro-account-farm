@@ -237,7 +237,7 @@ export async function batchRegister(config: BatchRegistrationConfig): Promise<Ba
     // Export current results before cleanup
     const currentProgress = getProgress(sessionManager, totalAccounts);
     if (currentProgress.sessions.length > 0) {
-      exportResults(currentProgress, outputFile);
+      await exportResults(currentProgress, outputFile);
     }
     
     logGlobal("Cleaning up browsers...");
@@ -376,7 +376,7 @@ function uploadCredentialBackground(session: SessionState): void {
 /**
  * Export results to JSON file (only valid tokens)
  */
-export function exportResults(progress: BatchProgress, filePath: string): void {
+export async function exportResults(progress: BatchProgress, filePath: string): Promise<void> {
   const validAccounts = progress.sessions.filter(
     (s) => s.status === "completed" && s.token && s.tokenStatus === "valid"
   );
@@ -443,7 +443,7 @@ export function exportResults(progress: BatchProgress, filePath: string): void {
     })),
   };
 
-  Bun.write(filePath, JSON.stringify(results, null, 2));
+  await Bun.write(filePath, JSON.stringify(results, null, 2));
 
   const parts = [`✅ ${validAccounts.length} valid`];
   if (suspendedAccounts.length > 0) parts.push(`⏸️ ${suspendedAccounts.length} suspended`);
