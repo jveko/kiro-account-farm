@@ -42,19 +42,23 @@ const SKIP_RESOURCE_TYPES = new Set([
   "media",
 ]);
 
+// Capture all resource types when profiling bandwidth
+const SKIP_RESOURCE_TYPES_NONE = new Set<string>();
+
 /**
  * Create a request logger for a Puppeteer page
  */
-export function createRequestLogger(page: Page, sessionId: string): RequestLogger {
+export function createRequestLogger(page: Page, sessionId: string, options?: { captureAll?: boolean }): RequestLogger {
   const entries: RequestLogEntry[] = [];
   const pendingRequests = new Map<string, { entry: RequestLogEntry; startTime: number }>();
   let isActive = false;
+  const skipTypes = options?.captureAll ? SKIP_RESOURCE_TYPES_NONE : SKIP_RESOURCE_TYPES;
 
   const onRequest = (request: HTTPRequest) => {
     if (!isActive) return;
     
     // Skip static assets
-    if (SKIP_RESOURCE_TYPES.has(request.resourceType())) return;
+    if (skipTypes.has(request.resourceType())) return;
 
     const entry: RequestLogEntry = {
       timestamp: new Date().toISOString(),
@@ -181,6 +185,138 @@ export function createRequestLogger(page: Page, sessionId: string): RequestLogge
       pendingRequests.clear();
     },
   };
+}
+
+export interface BandwidthSummary {
+  totalBytes: number;
+  networkBytes: number;
+  cachedBytes: number;
+  totalRequests: number;
+  networkRequests: number;
+  cachedRequests: number;
+  byResourceType: Record<string, { count: number; bytes: number; cached: number; cachedBytes: number }>;
+  byDomain: Record<string, { count: number; bytes: number; cached: number; cachedBytes: number }>;
+  topRequests: { url: string; bytes: number; resourceType: string; cached: boolean }[];
+}
+
+/**
+ * Summarize bandwidth usage from captured request entries.
+ * Separates network vs cache-served traffic when a cache checker is provided.
+ */
+export function summarizeBandwidth(
+  entries: RequestLogEntry[],
+  isCached?: (url: string) => boolean
+): BandwidthSummary {
+  const byResourceType: Record<string, { count: number; bytes: number; cached: number; cachedBytes: number }> = {};
+  const byDomain: Record<string, { count: number; bytes: number; cached: number; cachedBytes: number }> = {};
+  const allRequests: { url: string; bytes: number; resourceType: string; cached: boolean }[] = [];
+  let totalBytes = 0;
+  let networkBytes = 0;
+  let cachedBytes = 0;
+  let networkRequests = 0;
+  let cachedRequests = 0;
+
+  for (const entry of entries) {
+    const contentLength = Number(entry.response?.headers?.["content-length"] || 0);
+    const bodyLength = entry.response?.body?.length || 0;
+    const bytes = contentLength || bodyLength;
+    totalBytes += bytes;
+
+    const cached = isCached ? isCached(entry.url) : false;
+    if (cached) {
+      cachedBytes += bytes;
+      cachedRequests++;
+    } else {
+      networkBytes += bytes;
+      networkRequests++;
+    }
+
+    // By resource type
+    const rt = entry.resourceType || "other";
+    if (!byResourceType[rt]) byResourceType[rt] = { count: 0, bytes: 0, cached: 0, cachedBytes: 0 };
+    byResourceType[rt].count++;
+    byResourceType[rt].bytes += bytes;
+    if (cached) {
+      byResourceType[rt].cached++;
+      byResourceType[rt].cachedBytes += bytes;
+    }
+
+    // By domain
+    let domain: string;
+    try {
+      domain = new URL(entry.url).hostname;
+    } catch {
+      domain = "unknown";
+    }
+    if (!byDomain[domain]) byDomain[domain] = { count: 0, bytes: 0, cached: 0, cachedBytes: 0 };
+    byDomain[domain]!.count++;
+    byDomain[domain]!.bytes += bytes;
+    if (cached) {
+      byDomain[domain]!.cached++;
+      byDomain[domain]!.cachedBytes += bytes;
+    }
+
+    allRequests.push({ url: entry.url, bytes, resourceType: rt, cached });
+  }
+
+  // Top 20 requests by size
+  const topRequests = allRequests
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, 20);
+
+  return {
+    totalBytes, networkBytes, cachedBytes,
+    totalRequests: entries.length, networkRequests, cachedRequests,
+    byResourceType, byDomain, topRequests,
+  };
+}
+
+/**
+ * Format bandwidth summary as a human-readable string
+ */
+export function formatBandwidthSummary(summary: BandwidthSummary): string {
+  const fmt = (bytes: number) => {
+    if (bytes > 1_000_000) return `${(bytes / 1_000_000).toFixed(2)} MB`;
+    if (bytes > 1_000) return `${(bytes / 1_000).toFixed(1)} KB`;
+    return `${bytes} B`;
+  };
+
+  const lines: string[] = [
+    `\n═══ BANDWIDTH SUMMARY ═══`,
+    `Total: ${fmt(summary.totalBytes)} across ${summary.totalRequests} requests`,
+  ];
+
+  if (summary.cachedRequests > 0) {
+    lines.push(`  Network: ${fmt(summary.networkBytes)} (${summary.networkRequests} reqs)`);
+    lines.push(`  Cached:  ${fmt(summary.cachedBytes)} (${summary.cachedRequests} reqs, served from disk)`);
+  }
+
+  lines.push(``, `── By Resource Type ──`);
+  const sortedTypes = Object.entries(summary.byResourceType)
+    .sort(([, a], [, b]) => b.bytes - a.bytes);
+  for (const [type, { count, bytes, cached, cachedBytes }] of sortedTypes) {
+    const cacheNote = cached > 0 ? `  [${cached} cached: ${fmt(cachedBytes)}]` : "";
+    lines.push(`  ${type.padEnd(14)} ${fmt(bytes).padStart(10)}  (${count} reqs)${cacheNote}`);
+  }
+
+  lines.push(``, `── By Domain (top 15) ──`);
+  const sortedDomains = Object.entries(summary.byDomain)
+    .sort(([, a], [, b]) => b.bytes - a.bytes)
+    .slice(0, 15);
+  for (const [domain, { count, bytes, cached, cachedBytes }] of sortedDomains) {
+    const cacheNote = cached > 0 ? `  [${cached} cached: ${fmt(cachedBytes)}]` : "";
+    lines.push(`  ${domain.padEnd(40)} ${fmt(bytes).padStart(10)}  (${count} reqs)${cacheNote}`);
+  }
+
+  lines.push(``, `── Top 10 Largest Requests ──`);
+  for (const { url, bytes, resourceType, cached } of summary.topRequests.slice(0, 10)) {
+    const shortUrl = url.length > 80 ? url.substring(0, 77) + "..." : url;
+    const tag = cached ? "💾" : "🌐";
+    lines.push(`  ${tag} ${fmt(bytes).padStart(10)}  [${resourceType}] ${shortUrl}`);
+  }
+
+  lines.push(`═════════════════════════\n`);
+  return lines.join("\n");
 }
 
 /**

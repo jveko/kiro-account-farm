@@ -17,9 +17,9 @@ import { FreemailClient } from "../../api/freemail";
 import { SessionManager } from "./session";
 import { processPage, handleVerifyPage } from "./register";
 import { createPageAutomationContext } from "./context";
-import { AWS_BUILDER_ID, BROWSER_MODE, LOW_BANDWIDTH, FAST_MODE, TIMEOUTS } from "../../config";
+import { AWS_BUILDER_ID, BROWSER_MODE, LOW_BANDWIDTH, FAST_MODE, TIMEOUTS, VERBOSE } from "../../config";
 import type { AWSBuilderIDAccount, SessionState, BatchProgress } from "../../types/aws-builder-id";
-import { enableResourceBlocking } from "../../utils/resource-blocker";
+import { enableResourceBlocking, resetCacheStats, getCacheStats, wasCached } from "../../utils/resource-blocker";
 
 export interface WorkerProxy {
   username: string;
@@ -112,13 +112,16 @@ export async function registrationWorker(
 
     // Block unnecessary resources in low bandwidth or fast mode
     if (LOW_BANDWIDTH || FAST_MODE) {
+      resetCacheStats();
       await enableResourceBlocking(page);
       if (!FAST_MODE) logSession(account.email, "Low bandwidth mode: blocking images/fonts/css");
     }
 
-    // Enable bandwidth profiling — captures all resource types
-    requestLogger = createRequestLogger(page, sessionState.id, { captureAll: true });
-    requestLogger.start();
+    // Enable bandwidth profiling when LOG_LEVEL=debug
+    if (VERBOSE) {
+      requestLogger = createRequestLogger(page, sessionState.id, { captureAll: true });
+      requestLogger.start();
+    }
 
     // Wait for browser to stabilize
     await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 200 : 1000));
@@ -396,8 +399,12 @@ export async function registrationWorker(
     // Print bandwidth summary and save request log
     if (requestLogger) {
       requestLogger.stop();
-      const summary = summarizeBandwidth(requestLogger.entries);
+      const summary = summarizeBandwidth(requestLogger.entries, wasCached);
+      const cacheStats = getCacheStats();
       logSession(account.email, formatBandwidthSummary(summary));
+      if (cacheStats.hits > 0 || cacheStats.misses > 0) {
+        logSession(account.email, `📦 Cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses`);
+      }
       const logPath = await requestLogger.save();
       logSession(account.email, `📝 Request log: ${logPath}`);
     }
