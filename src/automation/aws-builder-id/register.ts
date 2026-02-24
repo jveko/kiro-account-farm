@@ -223,6 +223,14 @@ async function clickButton(page: Page, selector: string, maxWaitMs: number = 500
 
     if (!canClick) return false;
 
+    // Wait for form readiness — AWS React app renders the button enabled before
+    // internal state is hydrated. Submitting too early causes "error processing
+    // your request". Wait until no pending network requests and React has settled.
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
     await page.evaluate((sel) => {
       const btn = document.querySelector(sel) as HTMLButtonElement;
       if (btn) btn.scrollIntoView({ block: 'center', behavior: 'instant' });

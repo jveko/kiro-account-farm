@@ -9,7 +9,7 @@ import { validateToken } from "../../api/token-validator";
 import { configureBrowserProxy, configureBrowserFingerprint, openBrowser, closeBrowser } from "../../services/browser";
 import { launchLocalBrowser, closeLocalBrowser, authenticateProxy, type LocalBrowserSession } from "../../services/browser-local";
 import { logSession } from "../../utils/logger";
-// import { createRequestLogger, type RequestLogger } from "../../utils/request-logger";
+import { createRequestLogger, summarizeBandwidth, formatBandwidthSummary, type RequestLogger } from "../../utils/request-logger";
 import { fetchOtp } from "../../utils/email-provider";
 import type { EmailProvider } from "../../types/provider";
 import { MailtmClient } from "../../api/mailtm";
@@ -58,7 +58,7 @@ export async function registrationWorker(
   const sessionState = sessionManager.createSession(account);
   let browser: Browser | null = null;
   let localSession: LocalBrowserSession | null = null;
-  // let requestLogger: RequestLogger | null = null;
+  let requestLogger: RequestLogger | null = null;
   const browserId = existingBrowserId || "";
   const profileName = existingProfileName || "default";
 
@@ -116,9 +116,9 @@ export async function registrationWorker(
       if (!FAST_MODE) logSession(account.email, "Low bandwidth mode: blocking images/fonts/css");
     }
 
-    // Request logging disabled
-    // requestLogger = createRequestLogger(page, sessionState.id);
-    // requestLogger.start();
+    // Enable bandwidth profiling — captures all resource types
+    requestLogger = createRequestLogger(page, sessionState.id, { captureAll: true });
+    requestLogger.start();
 
     // Wait for browser to stabilize
     await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 200 : 1000));
@@ -228,11 +228,12 @@ export async function registrationWorker(
               'button[type="submit"]'
             ];
             for (const btn of btnSelectors) {
-              const exists = await page.$(btn);
-              if (exists) {
-                await page.click(btn).catch(() => {});
-                break;
-              }
+              const clicked = await page.evaluate((sel) => {
+                const el = document.querySelector(sel) as HTMLButtonElement | null;
+                if (el && !el.disabled) { el.focus(); el.click(); return true; }
+                return false;
+              }, btn);
+              if (clicked) break;
             }
             await new Promise((resolve) => setTimeout(resolve, 3000));
             const retryErrors = await page.evaluate(() => {
@@ -392,12 +393,14 @@ export async function registrationWorker(
       status: "completed",
     });
 
-    // Request logging disabled
-    // if (requestLogger) {
-    //   requestLogger.stop();
-    //   const logPath = await requestLogger.save();
-    //   logSession(account.email, `📝 Request log: ${logPath}`);
-    // }
+    // Print bandwidth summary and save request log
+    if (requestLogger) {
+      requestLogger.stop();
+      const summary = summarizeBandwidth(requestLogger.entries);
+      logSession(account.email, formatBandwidthSummary(summary));
+      const logPath = await requestLogger.save();
+      logSession(account.email, `📝 Request log: ${logPath}`);
+    }
 
     // Close browser
     if (BROWSER_MODE === "local" && localSession) {
