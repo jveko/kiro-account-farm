@@ -4,6 +4,7 @@
  */
 
 import { join } from "path";
+import { writeFileSync } from "fs";
 import { logGlobal, logSession } from "../../utils/logger";
 import { checkHealth, closeAllBrowsers, deleteAllBrowserProfiles, getOrCreateBrowserProfile, resetBrowserProfile } from "../../services/browser";
 import { closeAllLocalBrowsers, resetInstanceCount } from "../../services/browser-local";
@@ -237,7 +238,7 @@ export async function batchRegister(config: BatchRegistrationConfig): Promise<Ba
     // Export current results before cleanup
     const currentProgress = getProgress(sessionManager, totalAccounts);
     if (currentProgress.sessions.length > 0) {
-      await exportResults(currentProgress, outputFile);
+      exportResults(currentProgress, outputFile);
     }
     
     logGlobal("Cleaning up browsers...");
@@ -376,7 +377,7 @@ function uploadCredentialBackground(session: SessionState): void {
 /**
  * Export results to JSON file (only valid tokens)
  */
-export async function exportResults(progress: BatchProgress, filePath: string): Promise<void> {
+export function exportResults(progress: BatchProgress, filePath: string): void {
   const validAccounts = progress.sessions.filter(
     (s) => s.status === "completed" && s.token && s.tokenStatus === "valid"
   );
@@ -443,7 +444,7 @@ export async function exportResults(progress: BatchProgress, filePath: string): 
     })),
   };
 
-  await Bun.write(filePath, JSON.stringify(results, null, 2));
+  writeFileSync(filePath, JSON.stringify(results, null, 2));
 
   const parts = [`✅ ${validAccounts.length} valid`];
   if (suspendedAccounts.length > 0) parts.push(`⏸️ ${suspendedAccounts.length} suspended`);
