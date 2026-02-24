@@ -279,9 +279,8 @@ export async function handleLoginPage(page: Page, account: AWSBuilderIDAccount):
  * Handle signup page (combined email + name fields)
  */
 export async function handleSignupPage(page: Page, account: AWSBuilderIDAccount): Promise<boolean> {
-  const emailSelector =
-    'input[placeholder="username@example.com"], input[name="email"], input[type="email"], input[autocomplete="username"]';
-  const nameSelector = 'input[placeholder="Maria José Silva"], input[placeholder*="name" i], input[name="name"], input[name="fullName"], input[data-testid="signup-full-name-input"]';
+  const emailSelector = 'input[placeholder="username@example.com"]';
+  const nameSelector = 'input[placeholder="Maria José Silva"]';
 
   try {
     await page.waitForSelector(emailSelector, { timeout: TIMEOUTS.MEDIUM });
