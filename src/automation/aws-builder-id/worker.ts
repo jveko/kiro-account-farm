@@ -209,7 +209,7 @@ export async function registrationWorker(
           };
         });
         if (pageErrors.sessionExpired || (result.pageType !== "verify" && pageErrors.awsError)) {
-          const maxPageErrorRetries = 3;
+          const maxPageErrorRetries = 5;
           let pageErrorResolved = false;
           for (let per = 1; per <= maxPageErrorRetries; per++) {
             logSession(account.email, `⚠ AWS error detected, clicking submit again... (${per}/${maxPageErrorRetries})`, "warn");
