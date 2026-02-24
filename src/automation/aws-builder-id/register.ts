@@ -36,7 +36,7 @@ export async function detectPageType(page: Page): Promise<PageType> {
     return "verify";
   }
   if (url.includes("/signup?registrationCode=")) {
-    return "password";
+    // Fall through to DOM-based detection — page may be blank
   }
   if (url.includes("#/signup/start")) {
     // Fall through to DOM-based detection to distinguish name-only vs combined signup

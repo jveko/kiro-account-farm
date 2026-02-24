@@ -203,7 +203,7 @@ export async function registrationWorker(
         const currentUrl = page.url();
         if (currentUrl.includes("/signup?registrationCode=") && result.pageType !== "password") {
           logSession(account.email, `⚠ Blank signup page detected, skipping account`, "warn");
-          throw new IPBlockedError("AWS error: blank signup page");
+          throw new Error("Blank signup page - skipping");
         }
 
         // Check for fatal page errors in one round-trip, retry up to 5 times
