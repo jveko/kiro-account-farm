@@ -40,8 +40,29 @@ function getExecutablePath(): string {
   return DEFAULT_CHROMIUM_PATH;
 }
 
-// OS options for fingerprint platform spoofing
-const PLATFORM_OPTIONS = ["windows", "linux", "macos"] as const;
+// OS options for fingerprint platform spoofing with realistic version strings
+const PLATFORM_CONFIGS = [
+  { platform: "windows", versions: ["10.0.0", "10.0.1", "15.0.0"] },
+  { platform: "linux", versions: ["6.1.0", "6.5.0", "6.8.0"] },
+  { platform: "macos", versions: ["14.5.0", "14.7.0", "15.2.0", "15.3.0"] },
+] as const;
+
+// Realistic GPU vendor+renderer pairs (must be consistent)
+const GPU_PROFILES = [
+  { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.5)" },
+  { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5)" },
+  { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER, OpenGL 4.5)" },
+  { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060, OpenGL 4.5)" },
+  { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070, OpenGL 4.5)" },
+  { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.5)" },
+  { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 6600, OpenGL 4.5)" },
+  { vendor: "Google Inc. (Apple)", renderer: "ANGLE (Apple, Apple M1, OpenGL 4.1)" },
+  { vendor: "Google Inc. (Apple)", renderer: "ANGLE (Apple, Apple M2, OpenGL 4.1)" },
+  { vendor: "Google Inc. (Apple)", renderer: "ANGLE (Apple, Apple M3, OpenGL 4.1)" },
+] as const;
+
+// Chrome brand versions (matching fingerprint-chromium v142 range)
+const BRAND_VERSIONS = ["140.0.0.0", "141.0.0.0", "142.0.0.0", "143.0.0.0"] as const;
 
 /**
  * Generate a random fingerprint seed (32-bit integer)
@@ -51,10 +72,12 @@ function generateFingerprintSeed(): number {
 }
 
 /**
- * Get a random platform for fingerprint spoofing
+ * Get a random platform config (platform + version)
  */
-function getRandomPlatform(): string {
-  return PLATFORM_OPTIONS[Math.floor(Math.random() * PLATFORM_OPTIONS.length)]!;
+function getRandomPlatformConfig(): { platform: string; version: string } {
+  const config = PLATFORM_CONFIGS[Math.floor(Math.random() * PLATFORM_CONFIGS.length)]!;
+  const version = config.versions[Math.floor(Math.random() * config.versions.length)]!;
+  return { platform: config.platform, version };
 }
 
 /**
@@ -66,17 +89,43 @@ function getRandomHardwareConcurrency(): number {
 }
 
 /**
+ * Get a random GPU profile (vendor + renderer pair)
+ */
+function getRandomGpuProfile(): { vendor: string; renderer: string } {
+  return GPU_PROFILES[Math.floor(Math.random() * GPU_PROFILES.length)]!;
+}
+
+/**
+ * Get a random Chrome brand version
+ */
+function getRandomBrandVersion(): string {
+  return BRAND_VERSIONS[Math.floor(Math.random() * BRAND_VERSIONS.length)]!;
+}
+
+export interface FingerprintOptions {
+  proxy?: Proxy;
+  timezone?: string;
+}
+
+/**
  * Build Chrome launch args for fingerprint-chromium
  */
-function buildFingerprintArgs(seed: number, proxy?: Proxy): string[] {
-  const platform = getRandomPlatform();
+function buildFingerprintArgs(seed: number, options: FingerprintOptions = {}): string[] {
+  const { proxy, timezone } = options;
+  const platformConfig = getRandomPlatformConfig();
   const hwConcurrency = getRandomHardwareConcurrency();
+  const gpuProfile = getRandomGpuProfile();
+  const brandVersion = getRandomBrandVersion();
 
   const args = [
     `--fingerprint=${seed}`,
-    `--fingerprint-platform=${platform}`,
+    `--fingerprint-platform=${platformConfig.platform}`,
+    `--fingerprint-platform-version=${platformConfig.version}`,
     `--fingerprint-brand=Chrome`,
+    `--fingerprint-brand-version=${brandVersion}`,
     `--fingerprint-hardware-concurrency=${hwConcurrency}`,
+    `--fingerprint-gpu-vendor=${gpuProfile.vendor}`,
+    `--fingerprint-gpu-renderer=${gpuProfile.renderer}`,
     "--lang=en-US",
     "--accept-lang=en-US,en",
     "--disable-non-proxied-udp",
@@ -93,6 +142,10 @@ function buildFingerprintArgs(seed: number, proxy?: Proxy): string[] {
     "--disable-backgrounding-occluded-windows",
     "--noerrdialogs",
   ];
+
+  if (timezone) {
+    args.push(`--timezone=${timezone}`);
+  }
 
   if (proxy) {
     args.push(`--proxy-server=http://${proxy.host}:${proxy.port}`);
@@ -135,7 +188,8 @@ function releaseSlot(slot: number): void {
  */
 export async function launchLocalBrowser(
   proxy?: Proxy,
-  profileId?: string
+  profileId?: string,
+  timezone?: string
 ): Promise<LocalBrowserSession> {
   const executablePath = getExecutablePath();
   const seed = generateFingerprintSeed();
@@ -145,7 +199,7 @@ export async function launchLocalBrowser(
     profileId || `profile-${seed}`
   );
 
-  const args = buildFingerprintArgs(seed, proxy);
+  const args = buildFingerprintArgs(seed, { proxy, timezone });
   args.push(`--user-data-dir=${userDataDir}`);
 
   // Wipe profile directory to prevent cache/cookie leakage between accounts
@@ -168,9 +222,11 @@ export async function launchLocalBrowser(
   }
 
   const platform = args.find((a) => a.startsWith("--fingerprint-platform="))?.split("=")[1];
-  logger.info("Launching fingerprint-chromium (seed={seed}, platform={platform})", {
+  const tz = args.find((a) => a.startsWith("--timezone="))?.split("=")[1];
+  logger.info("Launching fingerprint-chromium (seed={seed}, platform={platform}, tz={tz})", {
     seed,
     platform,
+    tz: tz || "system",
   });
 
   const browser = await puppeteer.launch({

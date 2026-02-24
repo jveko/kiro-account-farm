@@ -8,7 +8,7 @@ import { writeFileSync } from "fs";
 import { logGlobal, logSession } from "../../utils/logger";
 import { checkHealth, closeAllBrowsers, deleteAllBrowserProfiles, getOrCreateBrowserProfile, resetBrowserProfile } from "../../services/browser";
 import { closeAllLocalBrowsers, resetInstanceCount } from "../../services/browser-local";
-import { getNextValidProxy, getNextProxy, isProxyConfigured, getCurrentPort } from "../../services/proxy";
+import { getNextValidProxy, getNextProxy, isProxyConfigured, getCurrentPort, type ValidProxyResult } from "../../services/proxy";
 import { generateEmailAlias } from "../../utils/email-provider";
 import { generatePassword, generateName } from "../../utils/generators";
 import type { EmailProvider } from "../../types/provider";
@@ -117,9 +117,9 @@ async function processEmailWorker(
         }
       } else {
         logSession(workerLabel, `Finding valid proxy for account ${i}/${countPerEmail}...`);
-        const envProxy = await getNextValidProxy();
-        if (envProxy) {
-          accountProxy = envProxy;
+        const result = await getNextValidProxy();
+        if (result) {
+          accountProxy = { ...result.proxy, timezone: result.timezone };
         } else {
           logSession(workerLabel, `No valid proxy found, skipping account ${i}`);
           continue;
@@ -170,7 +170,11 @@ async function processEmailWorker(
         logSession(workerLabel, `🔄 Retry ${retryCount}/${maxRetries} - getting new proxy...`);
         const newProxy = SKIP_PROXY_CHECK ? getNextProxy() : await getNextValidProxy();
         if (newProxy) {
-          accountProxy = newProxy;
+          if ('proxy' in newProxy) {
+            accountProxy = { ...newProxy.proxy, timezone: newProxy.timezone };
+          } else {
+            accountProxy = newProxy;
+          }
         } else {
           logSession(workerLabel, `No valid proxy found for retry, skipping account ${i}`);
           break;

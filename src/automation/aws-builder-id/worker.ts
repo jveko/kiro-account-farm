@@ -6,10 +6,25 @@
 import type { Browser } from "puppeteer-core";
 import { AWSDeviceAuthClient } from "../../api/aws-oidc";
 import { validateToken } from "../../api/token-validator";
-import { configureBrowserProxy, configureBrowserFingerprint, openBrowser, closeBrowser } from "../../services/browser";
-import { launchLocalBrowser, closeLocalBrowser, authenticateProxy, type LocalBrowserSession } from "../../services/browser-local";
+import {
+  configureBrowserProxy,
+  configureBrowserFingerprint,
+  openBrowser,
+  closeBrowser,
+} from "../../services/browser";
+import {
+  launchLocalBrowser,
+  closeLocalBrowser,
+  authenticateProxy,
+  type LocalBrowserSession,
+} from "../../services/browser-local";
 import { logSession } from "../../utils/logger";
-import { createRequestLogger, summarizeBandwidth, formatBandwidthSummary, type RequestLogger } from "../../utils/request-logger";
+import {
+  createRequestLogger,
+  summarizeBandwidth,
+  formatBandwidthSummary,
+  type RequestLogger,
+} from "../../utils/request-logger";
 import { fetchOtp } from "../../utils/email-provider";
 import type { EmailProvider } from "../../types/provider";
 import { MailtmClient } from "../../api/mailtm";
@@ -17,15 +32,32 @@ import { FreemailClient } from "../../api/freemail";
 import { SessionManager } from "./session";
 import { processPage, handleVerifyPage } from "./register";
 import { createPageAutomationContext } from "./context";
-import { AWS_BUILDER_ID, BROWSER_MODE, LOW_BANDWIDTH, FAST_MODE, TIMEOUTS, VERBOSE } from "../../config";
-import type { AWSBuilderIDAccount, SessionState, BatchProgress } from "../../types/aws-builder-id";
-import { enableResourceBlocking, resetCacheStats, getCacheStats, wasCached } from "../../utils/resource-blocker";
+import {
+  AWS_BUILDER_ID,
+  BROWSER_MODE,
+  LOW_BANDWIDTH,
+  FAST_MODE,
+  TIMEOUTS,
+  VERBOSE,
+} from "../../config";
+import type {
+  AWSBuilderIDAccount,
+  SessionState,
+  BatchProgress,
+} from "../../types/aws-builder-id";
+import {
+  enableResourceBlocking,
+  resetCacheStats,
+  getCacheStats,
+  wasCached,
+} from "../../utils/resource-blocker";
 
 export interface WorkerProxy {
   username: string;
   password: string;
   host: string;
   port: number;
+  timezone?: string;
 }
 
 /**
@@ -53,7 +85,7 @@ export async function registrationWorker(
   existingBrowserId?: string,
   existingProfileName?: string,
   mailtmClient?: MailtmClient,
-  freemailClient?: FreemailClient
+  freemailClient?: FreemailClient,
 ): Promise<SessionState> {
   const sessionState = sessionManager.createSession(account);
   let browser: Browser | null = null;
@@ -85,7 +117,7 @@ export async function registrationWorker(
     if (BROWSER_MODE === "local") {
       // Use unique profile per account to ensure clean state
       const uniqueProfile = `${profileName}-${sessionState.id}`;
-      localSession = await launchLocalBrowser(proxy, uniqueProfile);
+      localSession = await launchLocalBrowser(proxy, uniqueProfile, proxy?.timezone);
       browser = localSession.browser;
     } else {
       if (proxy) {
@@ -114,12 +146,18 @@ export async function registrationWorker(
     if (LOW_BANDWIDTH || FAST_MODE) {
       resetCacheStats();
       await enableResourceBlocking(page);
-      if (!FAST_MODE) logSession(account.email, "Low bandwidth mode: blocking images/fonts/css");
+      if (!FAST_MODE)
+        logSession(
+          account.email,
+          "Low bandwidth mode: blocking images/fonts/css",
+        );
     }
 
     // Enable bandwidth profiling when LOG_LEVEL=debug
     if (VERBOSE) {
-      requestLogger = createRequestLogger(page, sessionState.id, { captureAll: true });
+      requestLogger = createRequestLogger(page, sessionState.id, {
+        captureAll: true,
+      });
       requestLogger.start();
     }
 
@@ -132,7 +170,10 @@ export async function registrationWorker(
 
     // Navigate to verification URL
     await page.goto(auth.verificationUriComplete, {
-      waitUntil: (LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local") ? "domcontentloaded" : "networkidle2",
+      waitUntil:
+        LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local"
+          ? "domcontentloaded"
+          : "networkidle2",
       timeout: TIMEOUTS.LONG,
     });
 
@@ -140,23 +181,36 @@ export async function registrationWorker(
     // reload until content appears (common on slow proxies)
     const maxReloads = FAST_MODE ? 1 : 3;
     for (let reload = 0; reload < maxReloads; reload++) {
-      await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 1000 : 3000));
-      const hasContent = await page.evaluate(() => {
-        const body = document.body;
-        if (!body) return false;
-        const text = body.innerText?.trim() || "";
-        // Check if any meaningful form elements or text are present
-        const hasInputs = document.querySelectorAll("input, button, form").length > 0;
-        return text.length > 50 || hasInputs;
-      }).catch(() => false);
+      await new Promise((resolve) =>
+        setTimeout(resolve, FAST_MODE ? 1000 : 3000),
+      );
+      const hasContent = await page
+        .evaluate(() => {
+          const body = document.body;
+          if (!body) return false;
+          const text = body.innerText?.trim() || "";
+          // Check if any meaningful form elements or text are present
+          const hasInputs =
+            document.querySelectorAll("input, button, form").length > 0;
+          return text.length > 50 || hasInputs;
+        })
+        .catch(() => false);
 
       if (hasContent) break;
 
-      logSession(account.email, `Page appears stuck, reloading... (${reload + 1}/${maxReloads})`);
-      await page.reload({
-        waitUntil: (LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local") ? "domcontentloaded" : "networkidle2",
-        timeout: TIMEOUTS.LONG,
-      }).catch(() => {});
+      logSession(
+        account.email,
+        `Page appears stuck, reloading... (${reload + 1}/${maxReloads})`,
+      );
+      await page
+        .reload({
+          waitUntil:
+            LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local"
+              ? "domcontentloaded"
+              : "networkidle2",
+          timeout: TIMEOUTS.LONG,
+        })
+        .catch(() => {});
     }
 
     logSession(account.email, "Navigated to AWS signup");
@@ -167,7 +221,7 @@ export async function registrationWorker(
     let lastPageType: string = "";
     let verificationMessageShown = false;
     let otpRetryCount = 0;
-    const maxOtpRetries = 5;
+    const maxOtpRetries = 10;
     let stuckPageCount = 0; // Track consecutive stuck iterations for reload
 
     while (attempts < maxAttempts) {
@@ -185,11 +239,19 @@ export async function registrationWorker(
 
         // If stuck for 20+ iterations (~10s), try reloading the page
         if (stuckPageCount > 0 && stuckPageCount % 20 === 0) {
-          logSession(account.email, `Page stuck on "${result.pageType}" for ${stuckPageCount} iterations, reloading...`);
-          await page.reload({
-            waitUntil: (LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local") ? "domcontentloaded" : "networkidle2",
-            timeout: TIMEOUTS.LONG,
-          }).catch(() => {});
+          logSession(
+            account.email,
+            `Page stuck on "${result.pageType}" for ${stuckPageCount} iterations, reloading...`,
+          );
+          await page
+            .reload({
+              waitUntil:
+                LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local"
+                  ? "domcontentloaded"
+                  : "networkidle2",
+              timeout: TIMEOUTS.LONG,
+            })
+            .catch(() => {});
           await new Promise((resolve) => setTimeout(resolve, 2000));
           ctx.processedPages.clear(); // Allow re-processing after reload
         }
@@ -205,8 +267,16 @@ export async function registrationWorker(
         // Detect blank signup page (registrationCode URL but nothing rendered)
         // Only skip after being stuck for 20+ iterations (~10s) to allow slow loading
         const currentUrl = page.url();
-        if (currentUrl.includes("/signup?registrationCode=") && result.pageType !== "password" && stuckPageCount >= 20) {
-          logSession(account.email, `⚠ Blank signup page after ${stuckPageCount} iterations, skipping account`, "warn");
+        if (
+          currentUrl.includes("/signup?registrationCode=") &&
+          result.pageType !== "password" &&
+          stuckPageCount >= 20
+        ) {
+          logSession(
+            account.email,
+            `⚠ Blank signup page after ${stuckPageCount} iterations, skipping account`,
+            "warn",
+          );
           throw new Error("Blank signup page - skipping");
         }
 
@@ -214,26 +284,42 @@ export async function registrationWorker(
         const pageErrors = await page.evaluate(() => {
           const text = document.body?.innerText || "";
           return {
-            awsError: text.includes("there was an error processing your request"),
-            sessionExpired: text.includes("Something doesn't compute") ||
+            awsError: text.includes(
+              "there was an error processing your request",
+            ),
+            sessionExpired:
+              text.includes("Something doesn't compute") ||
               text.includes("couldn't verify your sign up session"),
           };
         });
-        if (pageErrors.sessionExpired || (result.pageType !== "verify" && pageErrors.awsError)) {
-          const maxPageErrorRetries = 5;
+        if (
+          pageErrors.sessionExpired ||
+          (result.pageType !== "verify" && pageErrors.awsError)
+        ) {
+          const maxPageErrorRetries = 10;
           let pageErrorResolved = false;
           for (let per = 1; per <= maxPageErrorRetries; per++) {
-            logSession(account.email, `⚠ AWS error detected, clicking submit again... (${per}/${maxPageErrorRetries})`, "warn");
+            logSession(
+              account.email,
+              `⚠ AWS error detected, clicking submit again... (${per}/${maxPageErrorRetries})`,
+              "warn",
+            );
             await new Promise((resolve) => setTimeout(resolve, 2000));
             const btnSelectors = [
               'button[data-testid="signup-next-button"]',
               'button[data-testid="test-primary-button"]',
-              'button[type="submit"]'
+              'button[type="submit"]',
             ];
             for (const btn of btnSelectors) {
               const clicked = await page.evaluate((sel) => {
-                const el = document.querySelector(sel) as HTMLButtonElement | null;
-                if (el && !el.disabled) { el.focus(); el.click(); return true; }
+                const el = document.querySelector(
+                  sel,
+                ) as HTMLButtonElement | null;
+                if (el && !el.disabled) {
+                  el.focus();
+                  el.click();
+                  return true;
+                }
                 return false;
               }, btn);
               if (clicked) break;
@@ -242,8 +328,11 @@ export async function registrationWorker(
             const retryErrors = await page.evaluate(() => {
               const text = document.body?.innerText || "";
               return {
-                awsError: text.includes("there was an error processing your request"),
-                sessionExpired: text.includes("Something doesn't compute") ||
+                awsError: text.includes(
+                  "there was an error processing your request",
+                ),
+                sessionExpired:
+                  text.includes("Something doesn't compute") ||
                   text.includes("couldn't verify your sign up session"),
               };
             });
@@ -265,22 +354,32 @@ export async function registrationWorker(
         if (result.pageType === "verify") {
           const hasOtpError = await page.evaluate(() => {
             const text = document.body?.innerText || "";
-            return text.includes("that code didn't work") ||
+            return (
+              text.includes("that code didn't work") ||
               text.includes("try again") ||
-              text.includes("there was an error processing your request");
+              text.includes("there was an error processing your request")
+            );
           });
 
           if (!verificationMessageShown || hasOtpError) {
             if (hasOtpError) {
               otpRetryCount++;
               if (otpRetryCount > maxOtpRetries) {
-                throw new Error(`OTP verification failed after ${maxOtpRetries} retries`);
+                throw new Error(
+                  `OTP verification failed after ${maxOtpRetries} retries`,
+                );
               }
-              logSession(account.email, `⚠ OTP rejected, retrying... (${otpRetryCount}/${maxOtpRetries})`, "warn");
+              logSession(
+                account.email,
+                `⚠ OTP rejected, retrying... (${otpRetryCount}/${maxOtpRetries})`,
+                "warn",
+              );
               await new Promise((resolve) => setTimeout(resolve, 1000));
               // Click "Resend code" if available
               try {
-                const resendBtn = await page.$('button[data-testid="email-verification-resend-button"], button:has-text("Resend")');
+                const resendBtn = await page.$(
+                  'button[data-testid="email-verification-resend-button"], button:has-text("Resend")',
+                );
                 if (resendBtn) {
                   await resendBtn.click();
                   await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -290,30 +389,40 @@ export async function registrationWorker(
                 // Resend button not found - continue with polling anyway
               }
             } else {
-              logSession(account.email, `📧 Polling ${provider === "mailtm" ? "Mail.tm" : provider === "freemail" ? "Freemail" : "Gmail"} for OTP...`);
+              logSession(
+                account.email,
+                `📧 Polling ${provider === "mailtm" ? "Mail.tm" : provider === "freemail" ? "Freemail" : "Gmail"} for OTP...`,
+              );
             }
             verificationMessageShown = true;
-            
+
             // Fetch OTP with polling and auto-fill
             const otpResult = await fetchOtp(
               provider,
               account.email,
-              45,  // 45 attempts
+              45, // 45 attempts
               2000, // 2 second intervals = 90 seconds max
               (attempt, max) => {
                 if (attempt % 5 === 0) {
-                  logSession(account.email, `📧 Polling... (${attempt}/${max})`);
+                  logSession(
+                    account.email,
+                    `📧 Polling... (${attempt}/${max})`,
+                  );
                 }
               },
               mailtmClient,
-              freemailClient
+              freemailClient,
             );
-            
+
             if (otpResult.success && otpResult.code) {
               logSession(account.email, `✓ OTP received: ${otpResult.code}`);
               await handleVerifyPage(page, otpResult.code);
             } else {
-              logSession(account.email, `⚠ OTP fetch failed: ${otpResult.error}`, "warn");
+              logSession(
+                account.email,
+                `⚠ OTP fetch failed: ${otpResult.error}`,
+                "warn",
+              );
             }
           }
         }
@@ -323,9 +432,16 @@ export async function registrationWorker(
           break;
         }
 
-        if (!result.success && result.error && result.error !== "Already processed") {
+        if (
+          !result.success &&
+          result.error &&
+          result.error !== "Already processed"
+        ) {
           // Navigation errors are expected during page transitions - continue polling
-          if (result.error.includes("navigation") || result.error.includes("context was destroyed")) {
+          if (
+            result.error.includes("navigation") ||
+            result.error.includes("context was destroyed")
+          ) {
             await new Promise((resolve) => setTimeout(resolve, 500));
             attempts++;
             continue;
@@ -346,9 +462,13 @@ export async function registrationWorker(
         if (result.success && result.pageType !== "verify") {
           // Password page has longer redirect - wait more
           if (result.pageType === "password") {
-            await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 1000 : 3000));
+            await new Promise((resolve) =>
+              setTimeout(resolve, FAST_MODE ? 1000 : 3000),
+            );
           } else {
-            await new Promise((resolve) => setTimeout(resolve, FAST_MODE ? 300 : 1000));
+            await new Promise((resolve) =>
+              setTimeout(resolve, FAST_MODE ? 300 : 1000),
+            );
           }
         } else {
           // Poll every 500ms (like reference project)
@@ -361,7 +481,11 @@ export async function registrationWorker(
 
         const msg = error instanceof Error ? error.message : String(error);
         // Context destruction during navigation is expected — just retry
-        if (msg.includes("context was destroyed") || msg.includes("Execution context") || msg.includes("navigation")) {
+        if (
+          msg.includes("context was destroyed") ||
+          msg.includes("Execution context") ||
+          msg.includes("navigation")
+        ) {
           await new Promise((resolve) => setTimeout(resolve, 1000));
           attempts++;
           continue;
@@ -403,7 +527,10 @@ export async function registrationWorker(
       const cacheStats = getCacheStats();
       logSession(account.email, formatBandwidthSummary(summary));
       if (cacheStats.hits > 0 || cacheStats.misses > 0) {
-        logSession(account.email, `📦 Cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses`);
+        logSession(
+          account.email,
+          `📦 Cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses`,
+        );
       }
       const logPath = await requestLogger.save();
       logSession(account.email, `📝 Request log: ${logPath}`);

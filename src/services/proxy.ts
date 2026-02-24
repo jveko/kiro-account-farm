@@ -28,7 +28,9 @@ interface FraudCheckResponse {
   fraudScore: number;
   isResidential: boolean;
   country: string;
+  countryCode: string;
   city: string;
+  timezone: string;
 }
 
 /**
@@ -198,7 +200,7 @@ export function getCurrentPort(): number {
  * Check fraud score for a proxy
  * Returns fraud score or null if check failed
  */
-export async function checkProxyFraudScore(proxy: ProxyConfig): Promise<{ fraudScore: number; ip: string; country: string; city: string; isResidential: boolean } | null> {
+export async function checkProxyFraudScore(proxy: ProxyConfig): Promise<{ fraudScore: number; ip: string; country: string; countryCode: string; city: string; timezone: string; isResidential: boolean } | null> {
   const proxyUrl = proxy.username && proxy.password
     ? `http://${proxy.username}:${proxy.password}@${proxy.host}:${proxy.port}`
     : `http://${proxy.host}:${proxy.port}`;
@@ -218,7 +220,9 @@ export async function checkProxyFraudScore(proxy: ProxyConfig): Promise<{ fraudS
       fraudScore: data.fraudScore,
       ip: data.ip,
       country: data.country,
+      countryCode: data.countryCode,
       city: data.city,
+      timezone: data.timezone,
       isResidential: data.isResidential,
     };
   } catch {
@@ -226,12 +230,18 @@ export async function checkProxyFraudScore(proxy: ProxyConfig): Promise<{ fraudS
   }
 }
 
+export interface ValidProxyResult {
+  proxy: ProxyConfig;
+  timezone: string;
+  countryCode: string;
+}
+
 /**
  * Get next valid proxy with fraud score below threshold and residential
  * Keeps trying until finding a valid proxy or running out of ports
  * Skips IPs that have already been used
  */
-export async function getNextValidProxy(maxAttempts = 1000): Promise<ProxyConfig | null> {
+export async function getNextValidProxy(maxAttempts = 1000): Promise<ValidProxyResult | null> {
   const baseConfig = getProxyFromEnv();
   if (!baseConfig) {
     return null;
@@ -273,8 +283,8 @@ export async function getNextValidProxy(maxAttempts = 1000): Promise<ProxyConfig
 
     // Valid proxy found - mark IP as used
     addUsedIp(result.ip);
-    console.log(`    ✓ IP: ${result.ip} | Score: ${result.fraudScore} | Residential | ${result.city}, ${result.country}`);
-    return proxy;
+    console.log(`    ✓ IP: ${result.ip} | Score: ${result.fraudScore} | Residential | ${result.city}, ${result.country} | TZ: ${result.timezone}`);
+    return { proxy, timezone: result.timezone, countryCode: result.countryCode };
   }
 
   console.log(`  ⚠ No valid proxy found after ${maxAttempts} attempts`);
