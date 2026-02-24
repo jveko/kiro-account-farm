@@ -200,9 +200,10 @@ export async function registrationWorker(
         }
 
         // Detect blank signup page (registrationCode URL but nothing rendered)
+        // Only skip after being stuck for 20+ iterations (~10s) to allow slow loading
         const currentUrl = page.url();
-        if (currentUrl.includes("/signup?registrationCode=") && result.pageType !== "password") {
-          logSession(account.email, `⚠ Blank signup page detected, skipping account`, "warn");
+        if (currentUrl.includes("/signup?registrationCode=") && result.pageType !== "password" && stuckPageCount >= 20) {
+          logSession(account.email, `⚠ Blank signup page after ${stuckPageCount} iterations, skipping account`, "warn");
           throw new Error("Blank signup page - skipping");
         }
 
