@@ -39,7 +39,7 @@ export async function detectPageType(page: Page): Promise<PageType> {
     return "password";
   }
   if (url.includes("#/signup/start")) {
-    return "name";
+    // Fall through to DOM-based detection to distinguish name-only vs combined signup
   }
 
   // Single IPC round-trip for all DOM checks
@@ -85,7 +85,6 @@ export async function detectPageType(page: Page): Promise<PageType> {
 
   // Signup (combined email + name page)
   if (domState.hasNameInput && domState.hasEmailInput) return "signup";
-  if (url.includes("#/signup/enter-email") && domState.hasNameInput) return "signup";
 
   // Name (name-only page, no email field)
   if (domState.hasNameInput && !domState.hasEmailInput) return "name";
