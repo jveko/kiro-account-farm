@@ -228,22 +228,27 @@ async function clickButton(page: Page, selector: string, maxWaitMs: number = 500
       if (btn) btn.scrollIntoView({ block: 'center', behavior: 'instant' });
     }, selector);
 
-    if (FAST_MODE) {
-      // Direct JS click in fast mode — skip mouse simulation
-      await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.BEFORE_CLICK));
-      await page.click(selector);
-    } else {
-      // Random mouse movement before clicking (human-like behavior)
+    if (!FAST_MODE) {
+      // Random mouse movement before clicking (human-like behavior for anti-detection)
       await randomMouseMovement(page);
 
-      // Use natural mouse movement to click
-      const clicked = await moveToElementAndClick(page, selector);
-      if (!clicked) {
-        // Fallback to direct click
-        await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.BEFORE_CLICK));
-        await page.click(selector);
-      }
+      // Move mouse toward the element (visual realism), but don't rely on coordinate click
+      await moveToElementAndClick(page, selector).catch(() => {});
+      // Small pause after mouse arrives at element
+      await new Promise((resolve) => setTimeout(resolve, 30 + Math.random() * 50));
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.BEFORE_CLICK));
     }
+
+    // Use JS .click() for reliable activation — coordinate clicks miss when
+    // layout shifts between bounding-box measurement and mouse arrival
+    await page.evaluate((sel) => {
+      const btn = document.querySelector(sel) as HTMLButtonElement | null;
+      if (btn) {
+        btn.focus();
+        btn.click();
+      }
+    }, selector);
     
     await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.AFTER_CLICK));
 
@@ -376,7 +381,13 @@ export async function handleVerifyPage(page: Page, verificationCode?: string): P
     );
 
     await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.BEFORE_CLICK));
-    await page.click(continueBtn);
+    await page.evaluate((sel) => {
+      const btn = document.querySelector(sel) as HTMLButtonElement | null;
+      if (btn) {
+        btn.focus();
+        btn.click();
+      }
+    }, continueBtn);
     await new Promise((resolve) => setTimeout(resolve, AUTOMATION_DELAYS.AFTER_CLICK));
     
     return true;
