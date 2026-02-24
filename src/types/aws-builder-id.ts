@@ -76,6 +76,7 @@ export interface BatchProgress {
 export type PageType =
   | 'login'
   | 'name'
+  | 'signup'
   | 'verify'
   | 'password'
   | 'device_confirm'

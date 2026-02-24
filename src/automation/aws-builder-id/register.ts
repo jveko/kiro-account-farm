@@ -83,6 +83,9 @@ export async function detectPageType(page: Page): Promise<PageType> {
   if (domState.text.includes("Create your password")) return "password";
   if (domState.hasPwdInputs) return "password";
 
+  // Signup (combined email + name page)
+  if (domState.hasNameInput && domState.hasEmailInput) return "signup";
+
   // Name
   if (domState.text.includes("Enter your name")) return "name";
   if (domState.hasNameInput) return "name";
@@ -270,6 +273,44 @@ export async function handleLoginPage(page: Page, account: AWSBuilderIDAccount):
 
   const btnSelector = 'button[data-testid="test-primary-button"]';
   return await clickButton(page, btnSelector);
+}
+
+/**
+ * Handle signup page (combined email + name fields)
+ */
+export async function handleSignupPage(page: Page, account: AWSBuilderIDAccount): Promise<boolean> {
+  const emailSelector =
+    'input[placeholder="username@example.com"], input[name="email"], input[type="email"], input[autocomplete="username"]';
+  const nameSelector = 'input[placeholder="Maria José Silva"], input[placeholder*="name" i], input[name="name"], input[name="fullName"], input[data-testid="signup-full-name-input"]';
+
+  try {
+    await page.waitForSelector(emailSelector, { timeout: TIMEOUTS.MEDIUM });
+    await page.waitForSelector(nameSelector, { timeout: TIMEOUTS.MEDIUM });
+  } catch {
+    return false;
+  }
+
+  const emailFilled = await fastFill(page, emailSelector, account.email);
+  if (!emailFilled) return false;
+
+  const nameFilled = await fastFill(page, nameSelector, account.fullName);
+  if (!nameFilled) return false;
+
+  const btnSelectors = [
+    'button[data-testid="signup-next-button"]',
+    'button[data-testid="test-primary-button"]',
+    'button[type="submit"]'
+  ];
+
+  for (const btnSelector of btnSelectors) {
+    const exists = await page.$(btnSelector);
+    if (exists) {
+      const clicked = await clickButton(page, btnSelector);
+      if (clicked) return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -496,6 +537,9 @@ export async function processPage(
     switch (pageType) {
       case "login":
         success = await handleLoginPage(page, account);
+        break;
+      case "signup":
+        success = await handleSignupPage(page, account);
         break;
       case "name":
         success = await handleNamePage(page, account);
