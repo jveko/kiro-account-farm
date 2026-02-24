@@ -21,7 +21,7 @@ const DEFAULT_CHROMIUM_PATH = join(
     ? "Chromium.app/Contents/MacOS/Chromium"
     : process.platform === "win32"
       ? "chrome.exe"
-      : "chrome"
+      : "chrome",
 );
 
 function getExecutablePath(): string {
@@ -34,7 +34,7 @@ function getExecutablePath(): string {
   }
   if (!existsSync(DEFAULT_CHROMIUM_PATH)) {
     throw new Error(
-      `fingerprint-chromium not found at ${DEFAULT_CHROMIUM_PATH}. Run: bun bin/download-chromium.ts`
+      `fingerprint-chromium not found at ${DEFAULT_CHROMIUM_PATH}. Run: bun bin/download-chromium.ts`,
     );
   }
   return DEFAULT_CHROMIUM_PATH;
@@ -49,20 +49,55 @@ const PLATFORM_CONFIGS = [
 
 // Realistic GPU vendor+renderer pairs (must be consistent)
 const GPU_PROFILES = [
-  { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.5)" },
-  { vendor: "Google Inc. (Intel)", renderer: "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5)" },
-  { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER, OpenGL 4.5)" },
-  { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060, OpenGL 4.5)" },
-  { vendor: "Google Inc. (NVIDIA)", renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070, OpenGL 4.5)" },
-  { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.5)" },
-  { vendor: "Google Inc. (AMD)", renderer: "ANGLE (AMD, AMD Radeon RX 6600, OpenGL 4.5)" },
-  { vendor: "Google Inc. (Apple)", renderer: "ANGLE (Apple, Apple M1, OpenGL 4.1)" },
-  { vendor: "Google Inc. (Apple)", renderer: "ANGLE (Apple, Apple M2, OpenGL 4.1)" },
-  { vendor: "Google Inc. (Apple)", renderer: "ANGLE (Apple, Apple M3, OpenGL 4.1)" },
+  {
+    vendor: "Google Inc. (Intel)",
+    renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.5)",
+  },
+  {
+    vendor: "Google Inc. (Intel)",
+    renderer: "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5)",
+  },
+  {
+    vendor: "Google Inc. (NVIDIA)",
+    renderer: "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER, OpenGL 4.5)",
+  },
+  {
+    vendor: "Google Inc. (NVIDIA)",
+    renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060, OpenGL 4.5)",
+  },
+  {
+    vendor: "Google Inc. (NVIDIA)",
+    renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070, OpenGL 4.5)",
+  },
+  {
+    vendor: "Google Inc. (AMD)",
+    renderer: "ANGLE (AMD, AMD Radeon RX 580, OpenGL 4.5)",
+  },
+  {
+    vendor: "Google Inc. (AMD)",
+    renderer: "ANGLE (AMD, AMD Radeon RX 6600, OpenGL 4.5)",
+  },
+  {
+    vendor: "Google Inc. (Apple)",
+    renderer: "ANGLE (Apple, Apple M1, OpenGL 4.1)",
+  },
+  {
+    vendor: "Google Inc. (Apple)",
+    renderer: "ANGLE (Apple, Apple M2, OpenGL 4.1)",
+  },
+  {
+    vendor: "Google Inc. (Apple)",
+    renderer: "ANGLE (Apple, Apple M3, OpenGL 4.1)",
+  },
 ] as const;
 
 // Chrome brand versions (matching fingerprint-chromium v142 range)
-const BRAND_VERSIONS = ["140.0.0.0", "141.0.0.0", "142.0.0.0", "143.0.0.0"] as const;
+const BRAND_VERSIONS = [
+  "140.0.0.0",
+  "141.0.0.0",
+  "142.0.0.0",
+  "143.0.0.0",
+] as const;
 
 /**
  * Generate a random fingerprint seed (32-bit integer)
@@ -75,8 +110,10 @@ function generateFingerprintSeed(): number {
  * Get a random platform config (platform + version)
  */
 function getRandomPlatformConfig(): { platform: string; version: string } {
-  const config = PLATFORM_CONFIGS[Math.floor(Math.random() * PLATFORM_CONFIGS.length)]!;
-  const version = config.versions[Math.floor(Math.random() * config.versions.length)]!;
+  const config =
+    PLATFORM_CONFIGS[Math.floor(Math.random() * PLATFORM_CONFIGS.length)]!;
+  const version =
+    config.versions[Math.floor(Math.random() * config.versions.length)]!;
   return { platform: config.platform, version };
 }
 
@@ -110,7 +147,10 @@ export interface FingerprintOptions {
 /**
  * Build Chrome launch args for fingerprint-chromium
  */
-function buildFingerprintArgs(seed: number, options: FingerprintOptions = {}): string[] {
+function buildFingerprintArgs(
+  seed: number,
+  options: FingerprintOptions = {},
+): string[] {
   const { proxy, timezone } = options;
   const platformConfig = getRandomPlatformConfig();
   const hwConcurrency = getRandomHardwareConcurrency();
@@ -189,14 +229,14 @@ function releaseSlot(slot: number): void {
 export async function launchLocalBrowser(
   proxy?: Proxy,
   profileId?: string,
-  timezone?: string
+  timezone?: string,
 ): Promise<LocalBrowserSession> {
   const executablePath = getExecutablePath();
   const seed = generateFingerprintSeed();
   const userDataDir = join(
     import.meta.dir,
     "../../.chromium-profiles",
-    profileId || `profile-${seed}`
+    profileId || `profile-${seed}`,
   );
 
   const args = buildFingerprintArgs(seed, { proxy, timezone });
@@ -206,22 +246,6 @@ export async function launchLocalBrowser(
   try {
     await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
     await mkdir(userDataDir, { recursive: true });
-    // Set DevTools to open undocked (separate small window)
-    if (!HEADLESS) {
-      const prefsDir = join(userDataDir, "Default");
-      await mkdir(prefsDir, { recursive: true });
-      await Bun.write(
-        join(prefsDir, "Preferences"),
-        JSON.stringify({
-          devtools: {
-            preferences: {
-              "currentDockState": "\"undocked\"",
-              "InspectorView.splitViewState": "{\"vertical\":{\"size\":0},\"horizontal\":{\"size\":0}}",
-            },
-          },
-        })
-      );
-    }
   } catch {
     // Ignore — directory may be locked or not exist
   }
@@ -229,21 +253,26 @@ export async function launchLocalBrowser(
   // Position window using slot pool (reuses positions from closed browsers)
   const slot = acquireSlot();
   if (!HEADLESS) {
-    const col = slot % 3;
-    const row = Math.floor(slot / 3);
-    const windowWidth = 640;
-    const windowHeight = 480;
+    const col = slot % 2;
+    const row = Math.floor(slot / 2);
+    const windowWidth = 960;
+    const windowHeight = 540;
     args.push(`--window-size=${windowWidth},${windowHeight}`);
     args.push(`--window-position=${col * windowWidth},${row * windowHeight}`);
   }
 
-  const platform = args.find((a) => a.startsWith("--fingerprint-platform="))?.split("=")[1];
+  const platform = args
+    .find((a) => a.startsWith("--fingerprint-platform="))
+    ?.split("=")[1];
   const tz = args.find((a) => a.startsWith("--timezone="))?.split("=")[1];
-  logger.info("Launching fingerprint-chromium (seed={seed}, platform={platform}, tz={tz})", {
-    seed,
-    platform,
-    tz: tz || "system",
-  });
+  logger.info(
+    "Launching fingerprint-chromium (seed={seed}, platform={platform}, tz={tz})",
+    {
+      seed,
+      platform,
+      tz: tz || "system",
+    },
+  );
 
   const browser = await puppeteer.launch({
     executablePath,
@@ -253,7 +282,12 @@ export async function launchLocalBrowser(
     defaultViewport: null,
   });
 
-  const session = { browser, fingerprintSeed: seed, proxy: proxy || null, userDataDir };
+  const session = {
+    browser,
+    fingerprintSeed: seed,
+    proxy: proxy || null,
+    userDataDir,
+  };
   activeSessions.set(session, slot);
   return session;
 }
@@ -264,7 +298,7 @@ export async function launchLocalBrowser(
  */
 export async function authenticateProxy(
   session: LocalBrowserSession,
-  page: import("puppeteer-core").Page
+  page: import("puppeteer-core").Page,
 ): Promise<void> {
   if (session.proxy?.username && session.proxy?.password) {
     await page.authenticate({
@@ -278,7 +312,7 @@ export async function authenticateProxy(
  * Close a local browser session
  */
 export async function closeLocalBrowser(
-  session: LocalBrowserSession
+  session: LocalBrowserSession,
 ): Promise<void> {
   try {
     if (session.browser.isConnected()) {
@@ -298,7 +332,9 @@ export async function closeLocalBrowser(
 export async function closeAllLocalBrowsers(): Promise<number> {
   const count = activeSessions.size;
   const sessions = Array.from(activeSessions.keys());
-  await Promise.allSettled(sessions.map((session) => closeLocalBrowser(session)));
+  await Promise.allSettled(
+    sessions.map((session) => closeLocalBrowser(session)),
+  );
   usedSlots.clear();
   return count;
 }
