@@ -1,6 +1,6 @@
 /**
  * Browser Resource Blocker & Disk Cache
- * Blocks unnecessary network requests and caches large static assets
+ * Blocks non-AWS tracking requests and caches static assets
  * to reduce bandwidth usage during automation
  */
 
@@ -11,11 +11,10 @@ import { join } from "path";
 import { createHash } from "crypto";
 
 /**
- * Domains that are safe to block (analytics, tracking, ads)
- * Only exact domain matches — no substring matching on URLs
+ * Non-AWS domains safe to block (third-party tracking/ads)
+ * AWS tracking/analytics are kept to maintain consistent session data
  */
 const BLOCKED_DOMAINS = [
-  // Google tracking
   "google-analytics.com",
   "googletagmanager.com",
   "doubleclick.net",
@@ -24,36 +23,18 @@ const BLOCKED_DOMAINS = [
   "facebook.net",
   "hotjar.com",
   "sentry.io",
-  // AWS telemetry/analytics (54+ failed requests per run, adds latency)
-  "shortbread.aws.dev",
-  "shortbread.console.api.aws",
-  "shortbread.analytics.console.aws.a2z.com",
-  "prod.log.shortbread.aws.dev",
-  "prod.tools.shortbread.aws.dev",
-  "prod.log.shortbread.console.api.aws",
-  "prod.tools.shortbread.console.api.aws",
-  "prod.log.shortbread.analytics.console.aws.a2z.com",
-  "prod.tools.shortbread.analytics.console.aws.a2z.com",
-  "prod.tools.shortbread.panorama.console.api.aws",
-  // AWS logging/metrics
-  "log.sso-portal.us-east-1.amazonaws.com",
-  "d2c.aws.amazon.com",
-  "unagi-na.amazon.com",
-  "us-east-1.prod.pl.panorama.console.api.aws",
-  "vs.aws.amazon.com",
 ];
 
 /**
- * Resource types that are safe to block for form automation
+ * Resource types safe to block (never needed for form automation)
  */
 const BLOCKED_RESOURCE_TYPES = new Set([
   "image",
   "media",
-  "font",
 ]);
 
 /**
- * URL patterns to block (e.g., favicon from local proxy — 285 KB per run)
+ * URL patterns to block
  */
 const BLOCKED_URL_PATTERNS = [
   "/favicon.ico",
@@ -65,16 +46,8 @@ const BLOCKED_URL_PATTERNS = [
 const CACHEABLE_RESOURCE_TYPES = new Set([
   "script",
   "stylesheet",
+  "font",
 ]);
-
-/**
- * Domains whose static assets are cacheable (large JS/CSS bundles)
- */
-const CACHEABLE_DOMAINS = [
-  "profile.aws.amazon.com",
-  "us-east-1.signin.aws",
-  "assets.sso-portal.us-east-1.amazonaws.com",
-];
 
 const CACHE_DIR = join(import.meta.dir, "../../.cache/resources");
 
@@ -83,20 +56,10 @@ const CACHE_DIR = join(import.meta.dir, "../../.cache/resources");
  */
 function cacheKey(url: string): string {
   const hash = createHash("sha256").update(url).digest("hex").slice(0, 16);
-  // Extract filename for readability
   const urlPath = new URL(url).pathname;
   const filename = urlPath.split("/").pop() || "unknown";
-  // Sanitize filename
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
   return `${hash}-${safe}`;
-}
-
-/**
- * Check if a URL is cacheable (static asset from known domains)
- */
-function isCacheable(url: string, resourceType: string): boolean {
-  if (!CACHEABLE_RESOURCE_TYPES.has(resourceType)) return false;
-  return CACHEABLE_DOMAINS.some((domain) => url.includes(domain));
 }
 
 /**
@@ -190,7 +153,6 @@ async function handleCacheableRequest(request: HTTPRequest, page: Page): Promise
   // Cache miss — let the request through, then cache the response
   cacheMisses++;
 
-  // Listen for the response to this specific request
   const responseHandler = async (response: import("puppeteer-core").HTTPResponse) => {
     if (response.url() !== url) return;
     page.off("response", responseHandler);
@@ -212,7 +174,7 @@ async function handleCacheableRequest(request: HTTPRequest, page: Page): Promise
 }
 
 /**
- * Enable request interception to block unnecessary resources and cache static assets
+ * Enable request interception to block non-AWS trackers and cache static assets
  */
 export async function enableResourceBlocking(page: Page): Promise<void> {
   await page.setRequestInterception(true);
@@ -220,47 +182,28 @@ export async function enableResourceBlocking(page: Page): Promise<void> {
   page.on("request", (request) => {
     const resourceType = request.resourceType();
 
-    // Block images, media, fonts
+    // Block images and media only
     if (BLOCKED_RESOURCE_TYPES.has(resourceType)) {
-      request.abort().catch(() => {});
-      return;
-    }
-
-    // Allow stylesheets from domains required for SPA loading
-    // view.awsapps.com loads its app bundle from assets.sso-portal
-    if (resourceType === "stylesheet") {
-      const url = request.url();
-      if (url.includes("assets.sso-portal") || url.includes("view.awsapps.com")) {
-        // Check cache for allowed stylesheets too
-        if (isCacheable(url, resourceType)) {
-          handleCacheableRequest(request, page).catch(() => {
-            request.continue().catch(() => {});
-          });
-          return;
-        }
-        request.continue().catch(() => {});
-        return;
-      }
       request.abort().catch(() => {});
       return;
     }
 
     const url = request.url();
 
-    // Block known tracking/analytics domains
+    // Block non-AWS third-party trackers
     if (BLOCKED_DOMAINS.some((domain) => url.includes(domain))) {
       request.abort().catch(() => {});
       return;
     }
 
-    // Block specific URL patterns (favicon, etc.)
+    // Block specific URL patterns
     if (BLOCKED_URL_PATTERNS.some((pattern) => url.includes(pattern))) {
       request.abort().catch(() => {});
       return;
     }
 
-    // Cache eligible static assets (scripts from known domains)
-    if (isCacheable(url, resourceType)) {
+    // Cache all static assets (scripts, stylesheets, fonts) from any domain
+    if (CACHEABLE_RESOURCE_TYPES.has(resourceType)) {
       handleCacheableRequest(request, page).catch(() => {
         request.continue().catch(() => {});
       });
