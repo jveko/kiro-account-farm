@@ -219,6 +219,23 @@ export async function registrationWorker(
 
     logSession(account.email, "Navigated to AWS signup");
 
+    // Early check for CloudFront 403 block (IP banned before flow starts)
+    const initialCloudFrontBlocked = await page
+      .evaluate(() => {
+        const text = document.body?.innerText || "";
+        return (
+          text.includes("403 ERROR") &&
+          text.includes("Request blocked") &&
+          text.includes("CloudFront")
+        );
+      })
+      .catch(() => false);
+    if (initialCloudFrontBlocked) {
+      throw new IPBlockedError(
+        "CloudFront 403: request blocked on initial load — IP likely banned",
+      );
+    }
+
     // Step 3: Automate registration flow with faster polling
     let attempts = 0;
     const maxAttempts = LOW_BANDWIDTH ? 240 : 120; // 240 attempts * 500ms = 120s for low bandwidth
@@ -312,8 +329,17 @@ export async function registrationWorker(
             sessionExpired:
               text.includes("Something doesn't compute") ||
               text.includes("couldn't verify your sign up session"),
+            cloudfrontBlocked:
+              text.includes("403 ERROR") &&
+              text.includes("Request blocked") &&
+              text.includes("CloudFront"),
           };
         });
+        if (pageErrors.cloudfrontBlocked) {
+          throw new IPBlockedError(
+            "CloudFront 403: request blocked — IP likely banned",
+          );
+        }
         if (
           pageErrors.sessionExpired ||
           (result.pageType !== "verify" && pageErrors.awsError)
