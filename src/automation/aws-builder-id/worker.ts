@@ -212,13 +212,8 @@ export async function registrationWorker(
           const maxPageErrorRetries = 3;
           let pageErrorResolved = false;
           for (let per = 1; per <= maxPageErrorRetries; per++) {
-            logSession(account.email, `⚠ AWS error detected, reloading page... (${per}/${maxPageErrorRetries})`, "warn");
-            await page.reload({
-              waitUntil: (LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local") ? "domcontentloaded" : "networkidle2",
-              timeout: TIMEOUTS.LONG,
-            }).catch(() => {});
+            logSession(account.email, `⚠ AWS error detected, waiting and retrying... (${per}/${maxPageErrorRetries})`, "warn");
             await new Promise((resolve) => setTimeout(resolve, 3000));
-            ctx.processedPages.clear();
             const retryErrors = await page.evaluate(() => {
               const text = document.body?.innerText || "";
               return {
@@ -228,7 +223,7 @@ export async function registrationWorker(
               };
             });
             if (!retryErrors.sessionExpired && !retryErrors.awsError) {
-              logSession(account.email, `✓ AWS error resolved after reload`);
+              logSession(account.email, `✓ AWS error resolved`);
               pageErrorResolved = true;
               break;
             }
