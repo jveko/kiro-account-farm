@@ -117,7 +117,11 @@ export async function registrationWorker(
     if (BROWSER_MODE === "local") {
       // Use unique profile per account to ensure clean state
       const uniqueProfile = `${profileName}-${sessionState.id}`;
-      localSession = await launchLocalBrowser(proxy, uniqueProfile, proxy?.timezone);
+      localSession = await launchLocalBrowser(
+        proxy,
+        uniqueProfile,
+        proxy?.timezone,
+      );
       browser = localSession.browser;
     } else {
       if (proxy) {
@@ -179,38 +183,38 @@ export async function registrationWorker(
 
     // Detect stuck page — if body is empty or only has a spinner after initial load,
     // reload until content appears (common on slow proxies)
-    const maxReloads = FAST_MODE ? 1 : 3;
-    for (let reload = 0; reload < maxReloads; reload++) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, FAST_MODE ? 1000 : 3000),
-      );
-      const hasContent = await page
-        .evaluate(() => {
-          const body = document.body;
-          if (!body) return false;
-          const text = body.innerText?.trim() || "";
-          // Check if any meaningful form elements or text are present
-          const hasInputs =
-            document.querySelectorAll("input, button, form").length > 0;
-          return text.length > 50 || hasInputs;
-        })
-        .catch(() => false);
+    // Skip in FAST_MODE — goto() already waited for domcontentloaded
+    if (!FAST_MODE) {
+      const maxReloads = 3;
+      for (let reload = 0; reload < maxReloads; reload++) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const hasContent = await page
+          .evaluate(() => {
+            const body = document.body;
+            if (!body) return false;
+            const text = body.innerText?.trim() || "";
+            const hasInputs =
+              document.querySelectorAll("input, button, form").length > 0;
+            return text.length > 50 || hasInputs;
+          })
+          .catch(() => false);
 
-      if (hasContent) break;
+        if (hasContent) break;
 
-      logSession(
-        account.email,
-        `Page appears stuck, reloading... (${reload + 1}/${maxReloads})`,
-      );
-      await page
-        .reload({
-          waitUntil:
-            LOW_BANDWIDTH || FAST_MODE || BROWSER_MODE === "local"
-              ? "domcontentloaded"
-              : "networkidle2",
-          timeout: TIMEOUTS.LONG,
-        })
-        .catch(() => {});
+        logSession(
+          account.email,
+          `Page appears stuck, reloading... (${reload + 1}/${maxReloads})`,
+        );
+        await page
+          .reload({
+            waitUntil:
+              LOW_BANDWIDTH || BROWSER_MODE === "local"
+                ? "domcontentloaded"
+                : "networkidle2",
+            timeout: TIMEOUTS.LONG,
+          })
+          .catch(() => {});
+      }
     }
 
     logSession(account.email, "Navigated to AWS signup");
@@ -221,7 +225,7 @@ export async function registrationWorker(
     let lastPageType: string = "";
     let verificationMessageShown = false;
     let otpRetryCount = 0;
-    const maxOtpRetries = 10;
+    const maxOtpRetries = 5;
     let stuckPageCount = 0; // Track consecutive stuck iterations for reload
 
     while (attempts < maxAttempts) {
@@ -238,7 +242,8 @@ export async function registrationWorker(
         }
 
         // If stuck for 20+ iterations (~10s), try reloading the page
-        if (stuckPageCount > 0 && stuckPageCount % 20 === 0) {
+        // Skip reload in FAST_MODE — page is likely mid-redirect
+        if (!FAST_MODE && stuckPageCount > 0 && stuckPageCount % 20 === 0) {
           logSession(
             account.email,
             `Page stuck on "${result.pageType}" for ${stuckPageCount} iterations, reloading...`,
@@ -280,6 +285,23 @@ export async function registrationWorker(
           throw new Error("Blank signup page - skipping");
         }
 
+        // If we land on #/signup with email+name fields after login was already processed,
+        // the signup flow looped back — treat as failure
+        if (
+          result.pageType === "signup" &&
+          currentUrl.includes("#/signup") &&
+          ctx.processedPages.size > 0
+        ) {
+          logSession(
+            account.email,
+            `⚠ Signup page reappeared after login — registration failed`,
+            "warn",
+          );
+          throw new IPBlockedError(
+            "Signup flow looped back - likely IP blocked",
+          );
+        }
+
         // Check for fatal page errors in one round-trip, retry up to 5 times
         const pageErrors = await page.evaluate(() => {
           const text = document.body?.innerText || "";
@@ -296,7 +318,7 @@ export async function registrationWorker(
           pageErrors.sessionExpired ||
           (result.pageType !== "verify" && pageErrors.awsError)
         ) {
-          const maxPageErrorRetries = 10;
+          const maxPageErrorRetries = 5;
           let pageErrorResolved = false;
           for (let per = 1; per <= maxPageErrorRetries; per++) {
             logSession(
@@ -304,7 +326,8 @@ export async function registrationWorker(
               `⚠ AWS error detected, clicking submit again... (${per}/${maxPageErrorRetries})`,
               "warn",
             );
-            await new Promise((resolve) => setTimeout(resolve, 2000));
+            const preClickDelay = 1000 + Math.floor(Math.random() * 3000);
+            await new Promise((resolve) => setTimeout(resolve, preClickDelay));
             const btnSelectors = [
               'button[data-testid="signup-next-button"]',
               'button[data-testid="test-primary-button"]',
@@ -324,7 +347,8 @@ export async function registrationWorker(
               }, btn);
               if (clicked) break;
             }
-            await new Promise((resolve) => setTimeout(resolve, 3000));
+            const postClickDelay = 2000 + Math.floor(Math.random() * 3000);
+            await new Promise((resolve) => setTimeout(resolve, postClickDelay));
             const retryErrors = await page.evaluate(() => {
               const text = document.body?.innerText || "";
               return {

@@ -39,7 +39,7 @@ export async function detectPageType(page: Page): Promise<PageType> {
     // Fall through to DOM-based detection — page may be blank
   }
   if (url.includes("#/signup/start")) {
-    // Fall through to DOM-based detection to distinguish name-only vs combined signup
+    return "name";
   }
 
   // Single IPC round-trip for all DOM checks
@@ -332,7 +332,7 @@ export async function handleNamePage(page: Page, account: AWSBuilderIDAccount): 
 
   // Wait for the name input to appear (slow proxies need more time after login→name transition)
   try {
-    await page.waitForSelector(nameSelector, { timeout: TIMEOUTS.MEDIUM });
+    await page.waitForSelector(nameSelector, { timeout: FAST_MODE ? 2000 : TIMEOUTS.MEDIUM });
   } catch {
     return false;
   }
@@ -432,7 +432,7 @@ export async function handleDeviceConfirmPage(page: Page): Promise<boolean> {
   if (!FAST_MODE) await new Promise((resolve) => setTimeout(resolve, WAIT.SHORT));
 
   try {
-    await page.waitForSelector('#cli_verification_btn', { timeout: TIMEOUTS.MEDIUM });
+    await page.waitForSelector('#cli_verification_btn', { timeout: FAST_MODE ? 500 : TIMEOUTS.MEDIUM });
 
     // Dismiss any overlay that might block the button (cookie banner, password manager)
     await page.evaluate(() => {

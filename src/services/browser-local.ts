@@ -206,6 +206,22 @@ export async function launchLocalBrowser(
   try {
     await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
     await mkdir(userDataDir, { recursive: true });
+    // Set DevTools to open undocked (separate small window)
+    if (!HEADLESS) {
+      const prefsDir = join(userDataDir, "Default");
+      await mkdir(prefsDir, { recursive: true });
+      await Bun.write(
+        join(prefsDir, "Preferences"),
+        JSON.stringify({
+          devtools: {
+            preferences: {
+              "currentDockState": "\"undocked\"",
+              "InspectorView.splitViewState": "{\"vertical\":{\"size\":0},\"horizontal\":{\"size\":0}}",
+            },
+          },
+        })
+      );
+    }
   } catch {
     // Ignore — directory may be locked or not exist
   }
@@ -232,6 +248,7 @@ export async function launchLocalBrowser(
   const browser = await puppeteer.launch({
     executablePath,
     headless: HEADLESS,
+    devtools: !HEADLESS,
     args,
     defaultViewport: null,
   });
